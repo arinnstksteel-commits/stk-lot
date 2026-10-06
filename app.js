@@ -1015,6 +1015,7 @@ async function viewDelivery(params) {
     box.innerHTML = trips.map((t) => {
       const stops = t.delivery_stops.sort((a, b) => a.seq - b.seq);
       const loaded = stops.filter((s) => s.loaded_at).length;
+      const hq = stops.flatMap((s) => s.items.filter((it) => it.source === 'hq').map((it) => ({ ...it, who: s.seq })));
       return `<div class="card">
         <div class="row" style="align-items:flex-start"><div>
           <h2 style="font-size:17px">รถคันที่ ${t.seq}</h2>
@@ -1023,10 +1024,13 @@ async function viewDelivery(params) {
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
             <span class="chip ${stops.length && loaded === stops.length ? 'ok' : 'warn'}">ขึ้นรถ ${loaded}/${stops.length}</span>
             ${isOffice() ? `<a class="btn ghost sm" href="#/delivery/trip/${t.id}">แก้ไข</a>` : ''}</div></div>
+        ${hq.length ? `<div style="background:var(--warn-bg);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:4px">
+          <b style="color:var(--warn)">ต้องแวะรับที่สาขาใหญ่ ${hq.length} รายการ</b>
+          ${hq.map((it) => `<div class="row" style="font-size:14px;align-items:flex-start"><span><span class="muted">เจ้าที่ ${it.who}</span> · <span data-notr>${esc(it.name)}</span></span><b class="mono" style="flex:none">${num(it.qty)} ${esc(it.unit || '')}</b></div>`).join('')}</div>` : ''}
         ${stops.map((s) => `<div class="sub-lot" style="flex-direction:column;align-items:stretch;gap:6px;${s.loaded_at ? 'opacity:.75' : ''}">
           <div class="row"><b>เจ้าที่ ${s.seq} · <span data-notr>${esc(s.customer)}</span></b>
             <button type="button" class="btn sm ${s.loaded_at ? 'dark' : 'ghost'}" data-load="${s.id}">${s.loaded_at ? '✓ ขึ้นรถแล้ว' : 'ขึ้นรถ'}</button></div>
-          ${s.items.length ? `<div data-notr>${s.items.map((it) => `<div class="row" style="font-size:14px"><span>${esc(it.name)}</span><b class="mono" style="flex:none">${num(it.qty)} ${esc(it.unit || '')}</b></div>`).join('')}</div>` : ''}
+          ${s.items.length ? `<div style="display:flex;flex-direction:column;gap:4px">${s.items.map((it) => `<div class="row" style="font-size:14px;align-items:flex-start"><span><span class="chip ${it.source === 'hq' ? 'warn' : 'info'}" style="margin-right:6px">${it.source === 'hq' ? 'สาขาใหญ่' : 'ในสต๊อค'}</span><span data-notr>${esc(it.name)}</span></span><b class="mono" style="flex:none">${num(it.qty)} ${esc(it.unit || '')}</b></div>`).join('')}</div>` : ''}
           <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${s.location ? `<a class="btn ghost sm" href="${esc(mapUrl(s.location))}" target="_blank" rel="noopener">📍 แผนที่</a>` : ''}
             ${s.phone ? `<a class="btn ghost sm" href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">📞 ${esc(s.phone)}</a>` : ''}</div>
@@ -1089,7 +1093,18 @@ async function viewDeliveryEdit(tripId, params) {
         <div class="suggest" hidden></div>
         <div class="grid3"><input name="iqty" type="number" step="any" min="0" inputmode="decimal" placeholder="จำนวน" value="${it.qty ?? ''}">
         <input name="iunit" placeholder="หน่วย" value="${esc(it.unit || '')}">
-        <button type="button" class="btn ghost sm rmItem">ลบ</button></div>`;
+        <button type="button" class="btn ghost sm rmItem">ลบ</button></div>
+        <div class="srcPick" role="radiogroup" aria-label="เอาของจากไหน" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <button type="button" data-src="stock" class="btn sm">ในสต๊อค</button>
+          <button type="button" data-src="hq" class="btn sm">รับที่สาขาใหญ่</button></div>`;
+      r.dataset.src = it.source === 'hq' ? 'hq' : 'stock';
+      const paintSrc = () => r.querySelectorAll('[data-src]').forEach((b) => {
+        const on = b.dataset.src === r.dataset.src;
+        b.className = 'btn sm ' + (on ? (b.dataset.src === 'hq' ? 'primary' : 'dark') : 'ghost');
+        b.setAttribute('aria-checked', on);
+      });
+      r.querySelectorAll('[data-src]').forEach((b) => b.onclick = () => { r.dataset.src = b.dataset.src; paintSrc(); });
+      paintSrc();
       const inp = r.querySelector('[name=iname]'); const box = r.querySelector('.suggest');
       inp.addEventListener('input', () => {
         const hits = searchProducts(products, inp.value, 8);
@@ -1146,6 +1161,7 @@ async function viewDeliveryEdit(tripId, params) {
           name: r.querySelector('[name=iname]').value.trim(),
           qty: Number(r.querySelector('[name=iqty]').value) || 0,
           unit: r.querySelector('[name=iunit]').value.trim(),
+          source: r.dataset.src === 'hq' ? 'hq' : 'stock',
         })).filter((x) => x.name),
       })).filter((s) => s.customer);
       if (!stops.length) return toast('ใส่ลูกค้าอย่างน้อย 1 เจ้า');
