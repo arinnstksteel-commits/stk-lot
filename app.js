@@ -1,6 +1,9 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
 import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES } from './config.js';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js';
+
+initI18n();
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 const app = document.getElementById('app');
@@ -184,7 +187,7 @@ function viewLogin(msg = '') {
   setTabs(null);
   app.innerHTML = `
   <form class="login" id="loginForm">
-    <div><div class="brand">STK Metal · สาขาเล็ก</div><h1>Lot &amp; ใบเซอร์</h1></div>
+    <div class="row" style="align-items:flex-start"><div><div class="brand">STK Metal · สาขาเล็ก</div><h1>Lot &amp; ใบเซอร์</h1></div>${langToggleHtml()}</div>
     ${msg ? `<div class="err">${esc(msg)}</div>` : ''}
     <label class="f">ชื่อผู้ใช้<input name="u" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="เช่น win"></label>
     <label class="f">รหัสผ่าน<input name="p" type="password" autocomplete="current-password" required></label>
@@ -216,7 +219,7 @@ async function viewHome() {
   setTabs('home');
   app.innerHTML = `
   <header class="head dark" style="flex-direction:column;align-items:stretch;gap:14px;padding:22px 16px 18px">
-    <div class="row"><div><div class="sub">STK Metal · ${esc(state.profile.full_name)} (${ROLE_TH[state.profile.role]})</div><h1 style="font-size:22px">Lot &amp; ใบเซอร์</h1></div></div>
+    <div class="row"><div><div class="sub">STK Metal · ${esc(state.profile.full_name)} (${ROLE_TH[state.profile.role]})</div><h1 style="font-size:22px">Lot &amp; ใบเซอร์</h1></div>${langToggleHtml()}</div>
     <form id="qs" class="row" style="gap:8px"><input name="q" placeholder="เลข Lot / INV / ชื่อสินค้า" aria-label="ค้นหา" style="border:0"><button class="btn primary" aria-label="ค้นหา">${ICON.search}</button><button type="button" class="btn ghost scanBtn" aria-label="สแกน QR" style="border:0">${ICON.scan}</button></form>
   </header>
   <div class="wrap">
@@ -824,6 +827,7 @@ function viewMe() {
   <div class="wrap"><div class="card">
     <div class="row"><span>ชื่อ</span><b>${esc(state.profile.full_name)}</b></div>
     <div class="row"><span>บทบาท</span><b>${ROLE_TH[state.profile.role]}</b></div>
+    <div class="row"><span>ภาษา</span>${langToggleHtml()}</div>
     <div class="row"><span>ชื่อผู้ใช้</span><span class="mono">${esc(state.session.user.email.replace('@' + EMAIL_DOMAIN, ''))}</span></div>
   </div><button class="btn ghost block" id="lo">ออกจากระบบ</button></div>`;
   document.getElementById('lo').onclick = () => sb.auth.signOut();
@@ -854,7 +858,10 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
-document.addEventListener('click', (e) => { if (e.target.closest('.scanBtn')) openScanner(); });
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.scanBtn')) openScanner();
+  if (e.target.closest('.langBtn')) setLang(getLang() === 'my' ? 'th' : 'my');
+});
 // เรียก Supabase ต่อจาก callback ด้วย setTimeout เพื่อไม่ให้ค้าง (ข้อแนะนำของ supabase-js)
 sb.auth.onAuthStateChange((_evt, session) => {
   const changed = (session?.user?.id || null) !== (state.session?.user?.id || null);
