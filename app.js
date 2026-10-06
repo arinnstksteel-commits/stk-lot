@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES } from './config.js?v=20261006173013';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261006173013';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES } from './config.js?v=20261006173208';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261006173208';
 
 initI18n();
 
