@@ -1,7 +1,7 @@
 // Service worker: ทำให้ติดตั้งเป็นแอปได้ และเปิดหน้าแอปได้แม้เน็ตหลุดชั่วคราว
 // ใช้ network-first สำหรับไฟล์ของแอป → อัปเดตใหม่เห็นทันทีเมื่อมีเน็ต
 // ไม่แตะคำขอไปที่ Supabase (ข้อมูลจริงต้องมาจากเซิร์ฟเวอร์เสมอ)
-const CACHE = 'stk-lot-v3';
+const CACHE = 'stk-lot-v4';
 const SHELL = ['./', './index.html', './app.css', './app.js', './i18n.js', './config.js', './manifest.webmanifest', './icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
@@ -18,10 +18,10 @@ self.addEventListener('fetch', (e) => {
   const cdn = url.hostname === 'cdn.jsdelivr.net' || url.hostname.endsWith('fonts.googleapis.com') || url.hostname.endsWith('fonts.gstatic.com');
   if (!sameOrigin && !cdn) return; // Supabase ฯลฯ ไม่แคช
   e.respondWith(
-    // หมายเหตุ: คำขอเปิดหน้า (navigate) ใส่ตัวเลือกเพิ่มไม่ได้ ใช้ fetch ตรงๆ
-    (req.mode === 'navigate' || !sameOrigin ? fetch(req) : fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' })).then((res) => {
+    // ไฟล์ของแอป: ขอใหม่จากเซิร์ฟเวอร์ทุกครั้ง (ใช้ URL แทน request เดิม เพราะ request แบบเปิดหน้าใส่ตัวเลือกเพิ่มไม่ได้)
+    (sameOrigin ? fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }) : fetch(req)).then((res) => {
       if (res.ok || res.type === 'opaque') { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
       return res;
-    }).catch(() => caches.match(req).then((r) => r || (req.mode === 'navigate' ? caches.match('./index.html') : undefined)))
+    }).catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || (req.mode === 'navigate' ? caches.match('./index.html') : undefined)))
   );
 });
