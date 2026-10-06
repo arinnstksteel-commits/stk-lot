@@ -169,19 +169,23 @@ async function viewHome() {
   document.getElementById('qs').onsubmit = (e) => { e.preventDefault(); const v = new FormData(e.target).get('q'); location.hash = '#/search?q=' + encodeURIComponent(v); };
 
   try {
-    const [noCert, noPhoto, overdue, recent] = await Promise.all([
+    const [noBill, noCert, noPhoto, overdue, recent] = await Promise.all([
+      q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
       q(sb.from('lot_balance').select('lot_no', { count: 'exact', head: false }).eq('has_cert', false).gt('qty_on_hand', 0)),
       q(sb.from('lot_balance').select('lot_no').eq('has_photo', false).gt('qty_on_hand', 0)),
       q(sb.from('process_jobs').select('id').eq('status', 'sent').lt('due_date', new Date().toISOString().slice(0, 10))),
       q(sb.from('lot_balance').select('*').order('lot_no', { ascending: false }).limit(8)),
     ]);
     const todo = [
-      ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn'],
-      ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn'],
-      ['ส่งตัด/ขัด เลยกำหนด', 'งานที่ยังไม่รับคืน', overdue.length, 'bad'],
+      ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
+      ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', ''],
+      ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', ''],
+      ['ส่งตัด/ขัด เลยกำหนด', 'งานที่ยังไม่รับคืน', overdue.length, 'bad', ''],
     ];
-    document.getElementById('todo').innerHTML = todo.map(([t, s, n, c]) =>
-      `<div class="row"><div><div>${t}</div><div class="muted">${s}</div></div><span class="chip ${n ? c : 'ok'}">${n}</span></div>`).join('');
+    document.getElementById('todo').innerHTML = todo.map(([t, s, n, c, href]) => {
+      const inner = `<div><div>${t}</div><div class="muted">${s}</div></div><span class="chip ${n ? c : 'ok'}">${n}</span>`;
+      return href && n ? `<a class="row" href="${href}" style="text-decoration:none;color:inherit">${inner}</a>` : `<div class="row">${inner}</div>`;
+    }).join('');
     document.getElementById('recent').innerHTML = recent.length ? recent.map(lotItem).join('') : '<p class="empty">ยังไม่มี Lot · เริ่มจากสร้าง PO ที่เมนู "รับของ"</p>';
   } catch (e) { fail(e); }
 }
@@ -418,12 +422,14 @@ async function viewLot(code) {
 
       <div class="card"><h2>ตัดสต๊อคจาก Lot นี้</h2>
         <form id="cutForm" style="display:flex;flex-direction:column;gap:8px">
-          <div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" required class="mono" placeholder="INV2026100001"></label>
-          <label class="f">จำนวน<input name="qty" type="number" min="0.01" step="any" required inputmode="decimal"></label></div>
-          <label class="f">ลูกค้า<input name="cust"></label>
+          <label class="f">จำนวน<input name="qty" type="number" min="0.01" step="any" required inputmode="decimal" class="big"></label>
+          <div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" class="mono" placeholder="ไม่รู้ เว้นว่างได้"></label>
+          <label class="f">ลูกค้า<input name="cust" placeholder="ไม่รู้ เว้นว่างได้"></label></div>
+          <label class="f">หมายเหตุ (ใครสั่ง / รายละเอียด)<input name="note" placeholder="เช่น เซลล์ม่อนสั่ง ลูกค้าหน้าร้าน"></label>
+          <p class="muted" style="margin:0">ยังไม่รู้เลขบิลหรือลูกค้า ตัดไปก่อนได้ ระบบจะขึ้นใน "งานค้าง" ให้ออฟฟิศเติมทีหลัง</p>
           <button class="btn primary">ยืนยันตัดสต๊อค</button></form></div>
 
-      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : ''}</div><div class="muted">${esc(m.customer || '')} ${fmtDate(m.created_at)}</div></div><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b></div>`).join('')}</div></div>
+      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div></div><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b></div>`).join('')}</div></div>
 
       ${isOffice() ? `<a class="btn ghost block" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a>` : ''}
     </div>`;
@@ -448,10 +454,11 @@ async function viewLot(code) {
       const fd = new FormData(e.target);
       const qty = Number(fd.get('qty'));
       if (qty > Number(bal.qty_on_hand)) return toast(`Lot นี้เหลือ ${num(bal.qty_on_hand)} ตัด ${num(qty)} ไม่ได้ กรุณานับใหม่`, 5000);
-      if (!confirm(`ตัด ${num(qty)} ${lot.products.unit} จาก Lot ${lot.lot_code}\nบิล ${fd.get('doc')} ?`)) return;
+      const doc = String(fd.get('doc') || '').trim().toUpperCase() || null;
+      if (!confirm(`ตัด ${num(qty)} ${lot.products.unit} จาก Lot ${lot.lot_code}\n${doc ? 'บิล ' + doc : '(ยังไม่มีเลขบิล — จะขึ้นในงานค้าง)'}`)) return;
       try {
-        await q(sb.from('stock_moves').insert({ lot_no: lot.lot_no, kind: 'sale', qty: -qty, doc_no: String(fd.get('doc')).trim().toUpperCase(), customer: fd.get('cust') || null }));
-        toast('ตัดสต๊อคแล้ว'); viewLot(code);
+        await q(sb.from('stock_moves').insert({ lot_no: lot.lot_no, kind: 'sale', qty: -qty, doc_no: doc, customer: String(fd.get('cust') || '').trim() || null, note: String(fd.get('note') || '').trim() || null }));
+        toast(doc ? 'ตัดสต๊อคแล้ว' : 'ตัดสต๊อคแล้ว · รอเติมเลขบิล'); viewLot(code);
       } catch (err) { fail(err); }
     };
   } catch (e) { fail(e); }
@@ -524,6 +531,44 @@ async function viewSearch(params) {
   } catch (e) { fail(e); }
 }
 
+/* ===================== งานค้าง: ตัดสต๊อครอเลขบิล ===================== */
+async function viewPending() {
+  setTabs('home');
+  app.innerHTML = head('ตัดสต๊อครอเลขบิล', 'คลังตัดไปก่อน · ออฟฟิศเติมเลขบิลและชื่อลูกค้า', '#/') + '<p class="loading">กำลังโหลด…</p>';
+  try {
+    const rows = await q(sb.from('stock_moves')
+      .select('id, qty, customer, note, created_at, created_by, lots(lot_code, products(name, unit))')
+      .eq('kind', 'sale').is('doc_no', null).order('id'));
+    const ids = [...new Set(rows.map((r) => r.created_by).filter(Boolean))];
+    const people = ids.length ? await q(sb.from('profiles').select('id, full_name').in('id', ids)) : [];
+    const who = new Map(people.map((p) => [p.id, p.full_name]));
+    app.innerHTML = head('ตัดสต๊อครอเลขบิล', `${rows.length} รายการ · ออฟฟิศเติมเลขบิลและชื่อลูกค้า`, '#/') + `
+    <div class="wrap">
+      ${rows.length ? rows.map((r) => `<form class="card fillForm" data-id="${r.id}">
+        <div class="row"><a class="lotcode" href="#/lot/${r.lots.lot_code}">Lot ${r.lots.lot_code}</a><span class="muted">${fmtDate(r.created_at)}</span></div>
+        <div><b>${esc(r.lots.products.name)}</b> × ${num(-r.qty)} ${esc(r.lots.products.unit)}</div>
+        <div class="muted">ตัดโดย ${esc(who.get(r.created_by) || '-')}${r.note ? ' · ' + esc(r.note) : ''}</div>
+        ${isOffice() ? `<div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" required class="mono" placeholder="INV2026100001"></label>
+          <label class="f">ลูกค้า<input name="cust" value="${esc(r.customer || '')}"></label></div>
+          <button class="btn dark">บันทึก</button>` : '<span class="chip warn">รอออฟฟิศเติมเลขบิล</span>'}
+      </form>`).join('') : '<div class="card"><p class="empty">ไม่มีรายการค้าง 🎉</p></div>'}
+    </div>`;
+    app.querySelectorAll('.fillForm').forEach((f) => f.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(f);
+      f.querySelector('button').disabled = true;
+      try {
+        await q(sb.from('stock_moves').update({
+          doc_no: String(fd.get('doc')).trim().toUpperCase(),
+          customer: String(fd.get('cust') || '').trim() || null,
+        }).eq('id', Number(f.dataset.id)));
+        toast('บันทึกแล้ว');
+        viewPending();
+      } catch (err) { fail(err); f.querySelector('button').disabled = false; }
+    });
+  } catch (e) { fail(e); }
+}
+
 /* ===================== บัญชี ===================== */
 function viewMe() {
   setTabs('me');
@@ -552,6 +597,7 @@ async function route() {
   if (parts[0] === 'label' && parts[1]) return viewLabel(lotCode(parts[1]));
   if (parts[0] === 'search') return viewSearch(params);
   if (parts[0] === 'me') return viewMe();
+  if (parts[0] === 'pending') return viewPending();
   return viewHome();
 }
 

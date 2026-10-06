@@ -19,3 +19,5 @@
 1. `supabase/schema.sql`
 2. `supabase/002_roles.sql`
 3. `supabase/003_process_office.sql`
+4. `supabase/004_flowaccount_products.sql`
+5. `supabase/005_pending_bill.sql`
