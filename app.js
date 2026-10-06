@@ -957,7 +957,7 @@ function viewMe() {
     <div class="row"><span>บทบาท</span><b>${ROLE_TH[state.profile.role]}</b></div>
     <div class="row"><span>ภาษา</span>${langToggleHtml()}</div>
     <div class="row"><span>ชื่อผู้ใช้</span><span class="mono">${esc(state.session.user.email.replace('@' + EMAIL_DOMAIN, ''))}</span></div>
-  </div>${installCardHtml()}<button class="btn ghost block" id="lo">ออกจากระบบ</button>
+  </div>${isAdmin() ? '<a class="btn dark block" href="#/users">จัดการผู้ใช้ / บทบาท</a>' : ''}${installCardHtml()}<button class="btn ghost block" id="lo">ออกจากระบบ</button>
   ${isAdmin() ? `<div class="card" style="outline:2px solid #FCA5A5"><h2>ล้างข้อมูลทดสอบ</h2>
     <p class="muted" style="margin:0">ลบ PO, Lot, ประวัติตัดสต๊อค, ใบเซอร์, รูป, ค่าวัด และงาน On Process ทั้งหมด · เลข Lot จะเริ่มที่ 00001 ใหม่<br>เก็บไว้: รายการสินค้าจาก FlowAccount และบัญชีพนักงาน · <b>กู้คืนไม่ได้</b></p>
     <label class="f">พิมพ์คำว่า <b>ล้างข้อมูล</b> เพื่อยืนยัน<input id="rsTxt" autocomplete="off"></label>
@@ -979,6 +979,42 @@ function viewMe() {
       } catch (err) { fail(err); rsBtn.disabled = false; }
     };
   }
+}
+
+/* ===================== จัดการผู้ใช้ (แอดมิน) ===================== */
+async function viewUsers() {
+  setTabs('me');
+  if (!isAdmin()) { app.innerHTML = head('จัดการผู้ใช้', '', '#/me') + '<div class="wrap"><p class="err">เฉพาะแอดมิน</p></div>'; return; }
+  app.innerHTML = head('จัดการผู้ใช้', 'กำหนดชื่อและบทบาทพนักงาน', '#/me') + '<div class="wrap" id="users"><p class="loading">กำลังโหลด…</p></div>';
+  try {
+    const users = await q(sb.rpc('admin_list_users'));
+    const box = document.getElementById('users');
+    const pending = users.filter((u) => !u.role).length;
+    box.innerHTML = `
+      <div class="card"><h2>เพิ่มพนักงานใหม่</h2>
+        <p class="muted" style="margin:0">1. สร้างบัญชีใน Supabase › Authentication › Users › Add user (อีเมล <span class="mono">ชื่อ@stk.local</span> ติ๊ก Auto Confirm)<br>2. กลับมาหน้านี้ กดรีเฟรช แล้วตั้งชื่อ + บทบาท กดบันทึก</p>
+        <a class="btn ghost sm" href="https://supabase.com/dashboard/project/jaowtuxiffqvjysxjfgw/auth/users" target="_blank" rel="noopener">เปิดหน้าสร้างบัญชี (Supabase)</a></div>
+      ${pending ? `<p class="err" style="margin:0">มี ${pending} บัญชียังไม่ได้ตั้งบทบาท — ยังใช้งานไม่ได้</p>` : ''}
+      ${users.map((u) => u.role === 'admin' ? `<div class="card"><div class="row"><div><b>${esc(u.full_name)}</b> <span class="muted mono">${esc(u.username)}</span></div><span class="chip ok">แอดมิน</span></div></div>` : `
+      <form class="card uf" data-id="${u.id}">
+        <div class="row"><span class="mono" style="font-weight:600">${esc(u.username)}</span>${u.role ? `<span class="chip ${u.role === 'office' ? 'info' : 'ok'}">${ROLE_TH[u.role]}</span>` : '<span class="chip bad">ยังไม่มีบทบาท</span>'}</div>
+        <div class="grid2"><label class="f">ชื่อเล่น<input name="name" value="${esc(u.full_name || '')}" placeholder="เช่น วิน" required></label>
+        <label class="f">บทบาท<select name="role">
+          <option value="warehouse" ${u.role === 'warehouse' ? 'selected' : ''}>คลัง</option>
+          <option value="office" ${u.role === 'office' ? 'selected' : ''}>ออฟฟิศ</option>
+          <option value="" ${u.role ? '' : 'selected'}>ไม่มีสิทธิ์ (ระงับ)</option></select></label></div>
+        <div class="row"><span class="muted">${u.last_sign_in_at ? 'เข้าใช้ล่าสุด ' + fmtDate(u.last_sign_in_at) : 'ยังไม่เคยเข้าใช้'}</span><button class="btn dark sm">บันทึก</button></div>
+      </form>`).join('')}`;
+    box.querySelectorAll('.uf').forEach((f) => f.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(f);
+      const role = fd.get('role') || null;
+      if (!role && !confirm('ระงับสิทธิ์บัญชีนี้? (ล็อกอินได้แต่จะไม่เห็นข้อมูล)')) return;
+      f.querySelector('button').disabled = true;
+      try { await q(sb.rpc('admin_set_user', { p_id: f.dataset.id, p_name: String(fd.get('name')).trim(), p_role: role })); toast('บันทึกแล้ว'); viewUsers(); }
+      catch (err) { fail(err); f.querySelector('button').disabled = false; }
+    });
+  } catch (e) { fail(e); }
 }
 
 /* ===================== ลบข้อมูล (แอดมินเท่านั้น) ===================== */
@@ -1014,6 +1050,7 @@ async function route() {
   if (parts[0] === 'labels') return viewLabels();
   if (parts[0] === 'search') return viewSearch(params);
   if (parts[0] === 'me') return viewMe();
+  if (parts[0] === 'users') return viewUsers();
   if (parts[0] === 'pending') return viewPending();
   if (parts[0] === 'lots') return viewLots(params);
   if (parts[0] === 'process' && parts[1] === 'new') return viewProcessNew(params);
