@@ -17,6 +17,10 @@ const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('th-TH', { day: '2-di
 const num = (v) => Number(v ?? 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const isOffice = () => ['admin', 'office'].includes(state.profile?.role);
 const isAdmin = () => state.profile?.role === 'admin';
+// ปุ่มลบ (เห็นเฉพาะแอดมิน) — จัดการคลิกรวมที่ adminDelete()
+const delBtn = (fn, id, msg, go = '', label = 'ลบ') => isAdmin()
+  ? `<button type="button" class="btn ghost sm del" data-adel="${fn}" data-id="${id}" data-msg="${esc(msg)}" data-go="${esc(go)}">${label}</button>` : '';
+const isAdmin = () => state.profile?.role === 'admin';
 const ROLE_TH = { admin: 'แอดมิน', office: 'ออฟฟิศ', warehouse: 'คลัง' };
 const baseUrl = () => location.href.split('#')[0];
 
@@ -525,7 +529,7 @@ async function viewPO(id) {
             <div style="display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end">
               ${isOffice() && !hasCert.has(x.lot_no) ? `<label class="btn primary sm">อัปโหลดเซอร์<input type="file" accept="application/pdf,image/*" hidden data-cert="${x.lot_no}"></label>` : ''}
               ${isOffice() ? `<a class="btn ghost sm" href="#/label/${x.lot_code}">สติกเกอร์</a>` : ''}
-              ${isOffice() && !rc ? `<button type="button" class="btn ghost sm" data-del="${x.lot_no}" data-code="${x.lot_code}">ลบ</button>` : ''}
+              ${isAdmin() ? delBtn('admin_delete_lot', x.lot_no, `ลบ Lot ${x.lot_code} ทั้งหมด? (กู้คืนไม่ได้)`) : isOffice() && !rc ? `<button type="button" class="btn ghost sm" data-del="${x.lot_no}" data-code="${x.lot_code}">ลบ</button>` : ''}
             </div></div>`;
           }).join('')}
           ${isOffice() ? `<details><summary class="btn dash block" style="list-style:none">+ แตกเพิ่มอีก Lot (ใบเซอร์ / ลัง / มัด)</summary>
@@ -536,6 +540,7 @@ async function viewPO(id) {
               <button class="btn dark">สร้าง Lot</button></form></details>` : ''}
         </div>`;
       }).join('')}
+      ${delBtn('admin_delete_po', po.id, `ลบ PO ${po.po_no} ทั้งใบ?\n(ทุก Lot ใน PO นี้ รวมประวัติ ใบเซอร์ รูป จะหายทั้งหมด กู้คืนไม่ได้)`, '#/po', 'ลบ PO นี้ทั้งใบ')}
     </div>`;
 
     const rcf = document.getElementById('rcForm');
@@ -614,16 +619,16 @@ async function viewLot(code) {
       <div class="muted">${rc?.purchase_orders?.po_no ? esc(rc.purchase_orders.po_no) + ' · ' : ''}${rc ? 'บิล ' + esc(rc.supplier_doc_no) + ' · รับ ' + fmtDate(rc.received_at) : ''}${lot.heat_no ? ' · Heat ' + esc(lot.heat_no) : ''}${Number(bal.qty_on_process) ? ` · <b>On Process ${num(bal.qty_on_process)}</b>` : ''}</div>
 
       <div class="card"><div class="row"><h2>ใบเซอร์</h2>${isOffice() ? `<label class="btn ghost sm">+ อัปโหลด<input type="file" accept="application/pdf,image/*" hidden id="certIn"></label>` : ''}</div>
-        ${certs.length ? certs.map((c) => `<div class="row"><span>${esc(c.file_name || 'ใบเซอร์')}</span><button class="btn ghost sm" data-open="${esc(c.storage_path)}">เปิด / ดาวน์โหลด</button></div>`).join('') : '<p class="empty" style="padding:4px 0">ยังไม่มีใบเซอร์</p>'}
+        ${certs.length ? certs.map((c) => `<div class="row"><span>${esc(c.file_name || 'ใบเซอร์')}</span><span style="display:flex;gap:6px"><button class="btn ghost sm" data-open="${esc(c.storage_path)}">เปิด / ดาวน์โหลด</button>${delBtn('admin_delete_file', c.id, 'ลบไฟล์ใบเซอร์ ' + (c.file_name || '') + ' ?')}</span></div>`).join('') : '<p class="empty" style="padding:4px 0">ยังไม่มีใบเซอร์</p>'}
       </div>
 
       <div class="card"><div class="row"><h2>รูปวัดขนาด</h2><span class="muted">${photos.length} รูป</span></div>
-        <div class="photos">${photoUrls.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="รูปวัด Lot ${esc(lot.lot_code)}" loading="lazy"></a>`).join('')}
+        <div class="photos">${photoUrls.map((u, i) => `<div class="ph"><a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="รูปวัด Lot ${esc(lot.lot_code)}" loading="lazy"></a>${delBtn('admin_delete_file', photos[i].id, 'ลบรูปนี้?', '', '×')}</div>`).join('')}
           <label class="add" aria-label="ถ่ายรูปเพิ่ม">+<input type="file" accept="image/*" capture="environment" hidden id="photoIn" multiple></label></div>
         <form id="measForm" style="display:flex;flex-direction:column;gap:8px">
           <div class="grid3">${cat.measures.map((m) => `<label class="f">${m} (มม.)<input name="${esc(m)}" inputmode="decimal" type="number" step="any" class="mono"></label>`).join('')}</div>
           <button class="btn dark sm">บันทึกค่าวัด</button></form>
-        ${meas.length ? `<div class="list">${meas.map((m) => `<div class="row"><span>${esc(m.measure)}</span><span class="mono">${num(m.value)} ${esc(m.unit)} <span class="muted">${fmtDate(m.created_at)}</span></span></div>`).join('')}</div>` : ''}
+        ${meas.length ? `<div class="list">${meas.map((m) => `<div class="row"><span>${esc(m.measure)}</span><span class="mono">${num(m.value)} ${esc(m.unit)} <span class="muted">${fmtDate(m.created_at)}</span> ${delBtn('admin_delete_measurement', m.id, 'ลบค่าวัด ' + m.measure + ' ?', '', '×')}</span></div>`).join('')}</div>` : ''}
       </div>
 
       ${!lot.receipt_id ? '<div class="card"><div class="row"><span>สถานะ</span><span class="chip info">รอของเข้า · ยังตัดสต๊อคไม่ได้</span></div><p class="muted" style="margin:0">คลังกดรับของที่หน้า PO เมื่อของมาถึง</p></div>' : ''}
@@ -636,9 +641,10 @@ async function viewLot(code) {
           <p class="muted" style="margin:0">ยังไม่รู้เลขบิลหรือลูกค้า ตัดไปก่อนได้ ระบบจะขึ้นใน "งานค้าง" ให้ออฟฟิศเติมทีหลัง</p>
           <button class="btn primary">ยืนยันตัดสต๊อค</button></form></div>
 
-      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div></div><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b></div>`).join('')}</div></div>
+      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div></div><span style="display:flex;gap:8px;align-items:center"><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b>${['sale', 'return', 'adjust'].includes(m.kind) ? delBtn('admin_delete_move', m.id, `ลบรายการ${KIND_TH[m.kind]} ${num(m.qty)} ${m.doc_no || ''} ?`, '', '×') : ''}</span></div>`).join('')}</div></div>
 
       ${isOffice() ? `<div class="grid2"><a class="btn ghost" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a><a class="btn ghost" href="#/process/new?lot=${esc(lot.lot_code)}">ส่งตัด / ขัด</a></div>` : ''}
+      ${delBtn('admin_delete_lot', lot.lot_no, `ลบ Lot ${lot.lot_code} ทั้งหมด?\n(ประวัติตัดสต๊อค ใบเซอร์ รูป ค่าวัด และงาน process ของ Lot นี้จะหายทั้งหมด กู้คืนไม่ได้)`, '#/', 'ลบ Lot นี้ทั้งหมด')}
     </div>`;
 
     app.querySelectorAll('[data-open]').forEach((b) => b.onclick = async () => { const u = await signedUrl(b.dataset.open, 600); if (u) window.open(u, '_blank', 'noopener'); });
@@ -869,6 +875,7 @@ async function viewProcess(params) {
         ${j.status === 'sent' && isOffice() ? `<div class="grid2">
           <button class="btn ghost sm" data-due="${j.id}">เลื่อนวันกำหนด</button>
           <button class="btn dark sm" data-ret="${j.id}">รับคืนแล้ว</button></div>` : ''}
+        ${isAdmin() ? `<div style="display:flex;justify-content:flex-end">${delBtn('admin_delete_process_job', j.id, 'ลบงาน ' + j.tasks.join(' + ') + ' Lot ' + j.lots.lot_code + ' ? (ยอด On Process จะถูกยกเลิกด้วย)')}</div>` : ''}
       </div>`;
     }).join('') : '<div class="card"><p class="empty">ไม่มีรายการ</p></div>';
     box.querySelectorAll('[data-ret]').forEach((b) => b.onclick = async () => {
@@ -955,6 +962,22 @@ function viewMe() {
   document.getElementById('lo').onclick = () => sb.auth.signOut();
 }
 
+/* ===================== ลบข้อมูล (แอดมินเท่านั้น) ===================== */
+const DEL_ARG = { admin_delete_lot: 'p_lot', admin_delete_po: 'p_po' };
+async function adminDelete(b) {
+  if (!isAdmin() || !confirm(b.dataset.msg)) return;
+  b.disabled = true;
+  try {
+    const fn = b.dataset.adel;
+    const r = await q(sb.rpc(fn, { [DEL_ARG[fn] || 'p_id']: Number(b.dataset.id) }));
+    const paths = (Array.isArray(r) ? r : [r]).filter((x) => typeof x === 'string' && x);
+    if (paths.length) await sb.storage.from('lot-files').remove(paths).catch(() => {});
+    toast('ลบแล้ว');
+    const go = b.dataset.go;
+    if (go && location.hash !== go) location.hash = go; else route();
+  } catch (err) { fail(err); b.disabled = false; }
+}
+
 /* ===================== router ===================== */
 async function route() {
   if (!state.session) return viewLogin();
@@ -983,6 +1006,8 @@ window.addEventListener('hashchange', route);
 document.addEventListener('click', (e) => {
   if (e.target.closest('.scanBtn')) openScanner();
   if (e.target.closest('.langBtn')) setLang(getLang() === 'my' ? 'th' : 'my');
+  const ad = e.target.closest('[data-adel]');
+  if (ad) { e.preventDefault(); adminDelete(ad); }
   if (e.target.closest('.installBtn') && installPrompt) { installPrompt.prompt(); installPrompt.userChoice.finally(() => { installPrompt = null; route(); }); }
 });
 // เรียก Supabase ต่อจาก callback ด้วย setTimeout เพื่อไม่ให้ค้าง (ข้อแนะนำของ supabase-js)
