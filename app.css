@@ -110,7 +110,7 @@ input.big { font-family: var(--mono); font-size: 22px; letter-spacing: 2px; min-
 .login h1 { margin: 0; font-size: 26px; }
 
 /* ---------- tab bar ---------- */
-#tabbar { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); padding-bottom: env(safe-area-inset-bottom); z-index: 10; }
+#tabbar { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--line); display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); padding-bottom: env(safe-area-inset-bottom); z-index: 10; }
 #tabbar a { text-decoration: none; color: var(--muted); min-height: 60px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 12px; }
 #tabbar a.on { color: var(--accent); font-weight: 600; }
 #tabbar svg { width: 22px; height: 22px; }

@@ -24,6 +24,7 @@ const ROLE_TH = { admin: 'แอดมิน', office: 'ออฟฟิศ', war
 const baseUrl = () => location.href.split('#')[0];
 
 const ICON = {
+  truck: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6h11v10H2zM13 9h4l4 4v3h-8z"/><circle cx="6" cy="17.5" r="1.8"/><circle cx="17" cy="17.5" r="1.8"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9H3z"/></svg>',
   box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>',
@@ -49,6 +50,7 @@ function setTabs(active) {
   const tabs = [
     ['home', '#/', 'หน้าแรก', ICON.home],
     ['po', '#/po', 'รับของ', ICON.box],
+    ['delivery', '#/delivery', 'ส่งของ', ICON.truck],
     ['search', '#/search', 'ค้นหา', ICON.search],
     ['me', '#/me', 'บัญชี', ICON.user],
   ];
@@ -981,6 +983,190 @@ function viewMe() {
   }
 }
 
+/* ===================== ส่งของ (แผนรายวัน) ===================== */
+const VEHICLE_TYPES = ['กระบะ', 'กระบะคอก', 'รถ 4 ล้อใหญ่', 'รถ 6 ล้อ', 'รถ 10 ล้อ', 'เทรลเลอร์', 'รถลูกค้ามารับ'];
+const isoDay = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
+const shiftDay = (day, n) => { const d = new Date(day + 'T00:00:00'); d.setDate(d.getDate() + n); return isoDay(d); };
+const dayLabel = (day) => new Date(day + 'T00:00:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' });
+// ลิงก์แผนที่: ถ้าเป็นลิงก์อยู่แล้วใช้เลย ไม่งั้นค้นใน Google Maps
+const mapUrl = (loc) => /^https?:\/\//i.test(loc) ? loc : 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(loc);
+
+async function viewDelivery(params) {
+  setTabs('delivery');
+  const day = params.get('d') || isoDay(new Date());
+  const today = isoDay(new Date());
+  app.innerHTML = head('ส่งของ', 'แผนรถส่งของรายวัน', '#/') + `
+  <div class="wrap">
+    <div class="row" style="gap:6px">
+      <a class="btn ghost sm" href="#/delivery?d=${shiftDay(day, -1)}" aria-label="วันก่อน">‹</a>
+      <input type="date" id="dPick" value="${day}" style="flex:1;text-align:center">
+      <a class="btn ghost sm" href="#/delivery?d=${shiftDay(day, 1)}" aria-label="วันถัดไป">›</a>
+    </div>
+    <div class="row"><b>${dayLabel(day)}</b>${day !== today ? `<a class="btn ghost sm" href="#/delivery">วันนี้</a>` : '<span class="chip info">วันนี้</span>'}</div>
+    ${isOffice() ? `<a class="btn primary block" href="#/delivery/new?d=${day}">+ เพิ่มรถ</a>` : ''}
+    <div id="trips"><p class="loading">กำลังโหลด…</p></div>
+  </div>`;
+  document.getElementById('dPick').onchange = (e) => { if (e.target.value) location.hash = '#/delivery?d=' + e.target.value; };
+  try {
+    const trips = await q(sb.from('delivery_trips').select('*, delivery_stops(*)').eq('run_date', day).order('seq'));
+    const box = document.getElementById('trips');
+    if (!trips.length) { box.innerHTML = `<div class="card"><p class="empty">ยังไม่มีแผนส่งของวันนี้${isOffice() ? ' · กด "+ เพิ่มรถ"' : ''}</p></div>`; return; }
+    box.style.cssText = 'display:flex;flex-direction:column;gap:14px';
+    box.innerHTML = trips.map((t) => {
+      const stops = t.delivery_stops.sort((a, b) => a.seq - b.seq);
+      const loaded = stops.filter((s) => s.loaded_at).length;
+      return `<div class="card">
+        <div class="row" style="align-items:flex-start"><div>
+          <h2 style="font-size:17px">รถคันที่ ${t.seq}</h2>
+          <div><span class="mono" style="font-weight:600">${esc(t.plate || '-')}</span> · ${esc(t.vehicle_type || '-')}</div>
+          ${t.note ? `<div class="muted">${esc(t.note)}</div>` : ''}</div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+            <span class="chip ${stops.length && loaded === stops.length ? 'ok' : 'warn'}">ขึ้นรถ ${loaded}/${stops.length}</span>
+            ${isOffice() ? `<a class="btn ghost sm" href="#/delivery/trip/${t.id}">แก้ไข</a>` : ''}</div></div>
+        ${stops.map((s) => `<div class="sub-lot" style="flex-direction:column;align-items:stretch;gap:6px;${s.loaded_at ? 'opacity:.75' : ''}">
+          <div class="row"><b>เจ้าที่ ${s.seq} · <span data-notr>${esc(s.customer)}</span></b>
+            <button type="button" class="btn sm ${s.loaded_at ? 'dark' : 'ghost'}" data-load="${s.id}">${s.loaded_at ? '✓ ขึ้นรถแล้ว' : 'ขึ้นรถ'}</button></div>
+          ${s.items.length ? `<div data-notr>${s.items.map((it) => `<div class="row" style="font-size:14px"><span>${esc(it.name)}</span><b class="mono" style="flex:none">${num(it.qty)} ${esc(it.unit || '')}</b></div>`).join('')}</div>` : ''}
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${s.location ? `<a class="btn ghost sm" href="${esc(mapUrl(s.location))}" target="_blank" rel="noopener">📍 แผนที่</a>` : ''}
+            ${s.phone ? `<a class="btn ghost sm" href="tel:${esc(s.phone.replace(/[^\d+]/g, ''))}">📞 ${esc(s.phone)}</a>` : ''}</div>
+          ${s.location && !/^https?:/i.test(s.location) ? `<div class="muted" data-notr>${esc(s.location)}</div>` : ''}
+          ${s.note ? `<div class="muted">${esc(s.note)}</div>` : ''}
+        </div>`).join('')}
+      </div>`;
+    }).join('');
+    box.querySelectorAll('[data-load]').forEach((b) => b.onclick = async () => {
+      b.disabled = true;
+      try { await q(sb.rpc('toggle_stop_loaded', { p_id: Number(b.dataset.load) })); viewDelivery(params); } catch (e) { fail(e); b.disabled = false; }
+    });
+  } catch (e) { fail(e); }
+}
+
+async function viewDeliveryEdit(tripId, params) {
+  setTabs('delivery');
+  if (!isOffice()) { app.innerHTML = head('แผนส่งของ', '', '#/delivery') + '<div class="wrap"><p class="err">ออฟฟิศเป็นคนจัดแผนส่งของ</p></div>'; return; }
+  app.innerHTML = head(tripId ? 'แก้ไขรถ' : 'เพิ่มรถส่งของ', '', '#/delivery') + '<p class="loading">กำลังโหลด…</p>';
+  try {
+    let trip = { run_date: params.get('d') || isoDay(new Date()), seq: null, plate: '', vehicle_type: '', note: '', delivery_stops: [] };
+    if (tripId) trip = await q(sb.from('delivery_trips').select('*, delivery_stops(*)').eq('id', tripId).single());
+    const [past, products] = await Promise.all([
+      q(sb.from('delivery_trips').select('plate, vehicle_type').not('plate', 'is', null).order('id', { ascending: false }).limit(300)),
+      loadProducts().catch(() => []),
+    ]);
+    const plates = new Map(); past.forEach((p) => { if (p.plate && !plates.has(p.plate)) plates.set(p.plate, p.vehicle_type); });
+    if (!tripId) {
+      const same = await q(sb.from('delivery_trips').select('seq').eq('run_date', trip.run_date));
+      trip.seq = same.reduce((m, x) => Math.max(m, x.seq), 0) + 1;
+    }
+    const back = '#/delivery?d=' + trip.run_date;
+    app.innerHTML = head(tripId ? `แก้ไขรถคันที่ ${trip.seq}` : 'เพิ่มรถส่งของ', dayLabel(trip.run_date), back) + `
+    <form class="wrap" id="tripForm">
+      <div class="card">
+        <div class="grid2"><label class="f">วันที่ส่ง<input name="run_date" type="date" value="${trip.run_date}" required></label>
+        <label class="f">รถคันที่<input name="seq" type="number" min="1" value="${trip.seq}" required inputmode="numeric"></label></div>
+        <div class="grid2"><label class="f">ทะเบียนรถ<input name="plate" list="plateList" value="${esc(trip.plate || '')}" placeholder="เช่น 3ฒฒ-1234" required></label>
+        <label class="f">ประเภทรถ<input name="vehicle_type" list="typeList" value="${esc(trip.vehicle_type || '')}" placeholder="เลือกหรือพิมพ์" required></label></div>
+        <datalist id="plateList">${[...plates.keys()].map((p) => `<option value="${esc(p)}">`).join('')}</datalist>
+        <datalist id="typeList">${VEHICLE_TYPES.map((t) => `<option value="${esc(t)}">`).join('')}</datalist>
+        <label class="f">หมายเหตุรถ<input name="note" value="${esc(trip.note || '')}" placeholder="เช่น คนขับ / ออกกี่โมง"></label>
+      </div>
+      <div id="stops" style="display:flex;flex-direction:column;gap:14px"></div>
+      <button type="button" class="btn dash block" id="addStop">+ เพิ่มเจ้าถัดไป</button>
+      <button class="btn primary block" type="submit">บันทึก</button>
+      ${tripId ? '<button type="button" class="btn ghost block del" id="delTrip">ลบรถคันนี้</button>' : ''}
+    </form>`;
+    const form = document.getElementById('tripForm');
+    form.querySelector('[name=plate]').addEventListener('change', (e) => {
+      const t = form.querySelector('[name=vehicle_type]');
+      if (!t.value && plates.get(e.target.value)) t.value = plates.get(e.target.value);
+    });
+    const stopsBox = document.getElementById('stops');
+    const renumber = () => [...stopsBox.children].forEach((c, i) => { c.querySelector('.stopn').textContent = `เจ้าที่ ${i + 1}`; });
+    const addItem = (wrap, it = {}) => {
+      const r = document.createElement('div');
+      r.className = 'itemRow'; r.style.cssText = 'display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:8px';
+      r.innerHTML = `<input name="iname" placeholder="สินค้า (พิมพ์ค้นหาได้)" autocomplete="off" value="${esc(it.name || '')}">
+        <div class="suggest" hidden></div>
+        <div class="grid3"><input name="iqty" type="number" step="any" min="0" inputmode="decimal" placeholder="จำนวน" value="${it.qty ?? ''}">
+        <input name="iunit" placeholder="หน่วย" value="${esc(it.unit || '')}">
+        <button type="button" class="btn ghost sm rmItem">ลบ</button></div>`;
+      const inp = r.querySelector('[name=iname]'); const box = r.querySelector('.suggest');
+      inp.addEventListener('input', () => {
+        const hits = searchProducts(products, inp.value, 8);
+        box.innerHTML = hits.map((p) => `<button type="button" data-name="${esc(p.name)}" data-unit="${esc(p.unit || '')}"><span>${esc(p.name)}</span><span class="muted mono">${esc(p.code || '')}</span></button>`).join('');
+        box.hidden = !inp.value.trim() || !hits.length;
+      });
+      box.addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-name]'); if (!b) return;
+        inp.value = b.dataset.name; box.hidden = true;
+        const u = r.querySelector('[name=iunit]'); if (!u.value) u.value = b.dataset.unit;
+        r.querySelector('[name=iqty]').focus();
+      });
+      inp.addEventListener('blur', () => setTimeout(() => { box.hidden = true; }, 200));
+      r.querySelector('.rmItem').onclick = () => r.remove();
+      wrap.appendChild(r);
+    };
+    const addStop = (s = {}) => {
+      const c = document.createElement('div');
+      c.className = 'card stop';
+      c.innerHTML = `<div class="row"><h2 class="stopn"></h2><button type="button" class="btn ghost sm rmStop">ลบเจ้านี้</button></div>
+        <label class="f">ชื่อลูกค้า<input name="customer" value="${esc(s.customer || '')}" required></label>
+        <div class="grid2"><label class="f">เบอร์โทร<input name="phone" type="tel" inputmode="tel" value="${esc(s.phone || '')}"></label>
+        <label class="f">โลเคชั่น<input name="location" value="${esc(s.location || '')}" placeholder="ลิงก์ Google Maps หรือที่อยู่"></label></div>
+        <div><div class="muted" style="margin-bottom:4px">สินค้า</div><div class="items" style="display:flex;flex-direction:column;gap:8px"></div>
+        <button type="button" class="btn dash sm addItem" style="margin-top:8px">+ เพิ่มสินค้า</button></div>
+        <label class="f">หมายเหตุ<input name="snote" value="${esc(s.note || '')}" placeholder="เช่น ส่งก่อน 10 โมง / เก็บเงินปลายทาง"></label>`;
+      const items = c.querySelector('.items');
+      (s.items?.length ? s.items : [{}]).forEach((it) => addItem(items, it));
+      c.querySelector('.addItem').onclick = () => addItem(items);
+      c.querySelector('.rmStop').onclick = () => { c.remove(); renumber(); };
+      c.dataset.loaded = s.loaded_at || '';
+      stopsBox.appendChild(c); renumber();
+    };
+    const existing = (trip.delivery_stops || []).sort((a, b) => a.seq - b.seq);
+    (existing.length ? existing : [{}]).forEach(addStop);
+    document.getElementById('addStop').onclick = () => { addStop(); stopsBox.lastChild.querySelector('[name=customer]').focus(); };
+
+    const del = document.getElementById('delTrip');
+    if (del) del.onclick = async () => {
+      if (!confirm(`ลบรถคันที่ ${trip.seq} (${trip.plate || ''}) และทุกเจ้าในคันนี้?`)) return;
+      try { await q(sb.from('delivery_trips').delete().eq('id', tripId)); toast('ลบแล้ว'); location.hash = back; } catch (e) { fail(e); }
+    };
+    form.onsubmit = async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const stops = [...stopsBox.querySelectorAll('.stop')].map((c, i) => ({
+        seq: i + 1,
+        customer: c.querySelector('[name=customer]').value.trim(),
+        phone: c.querySelector('[name=phone]').value.trim() || null,
+        location: c.querySelector('[name=location]').value.trim() || null,
+        note: c.querySelector('[name=snote]').value.trim() || null,
+        loaded_at: c.dataset.loaded || null,
+        items: [...c.querySelectorAll('.itemRow')].map((r) => ({
+          name: r.querySelector('[name=iname]').value.trim(),
+          qty: Number(r.querySelector('[name=iqty]').value) || 0,
+          unit: r.querySelector('[name=iunit]').value.trim(),
+        })).filter((x) => x.name),
+      })).filter((s) => s.customer);
+      if (!stops.length) return toast('ใส่ลูกค้าอย่างน้อย 1 เจ้า');
+      const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+      try {
+        const row = { run_date: fd.get('run_date'), seq: Number(fd.get('seq')) || 1, plate: String(fd.get('plate')).trim(), vehicle_type: String(fd.get('vehicle_type')).trim(), note: String(fd.get('note') || '').trim() || null };
+        let id = tripId;
+        if (id) {
+          await q(sb.from('delivery_trips').update(row).eq('id', id));
+          await q(sb.from('delivery_stops').delete().eq('trip_id', id));
+        } else {
+          id = (await q(sb.from('delivery_trips').insert(row).select('id').single())).id;
+        }
+        await q(sb.from('delivery_stops').insert(stops.map((s) => ({ ...s, trip_id: id }))));
+        toast('บันทึกแผนส่งของแล้ว');
+        location.hash = '#/delivery?d=' + row.run_date;
+      } catch (err) { fail(err); btn.disabled = false; }
+    };
+  } catch (e) { fail(e); }
+}
+
 /* ===================== จัดการผู้ใช้ (แอดมิน) ===================== */
 async function viewUsers() {
   setTabs('me');
@@ -1051,6 +1237,9 @@ async function route() {
   if (parts[0] === 'search') return viewSearch(params);
   if (parts[0] === 'me') return viewMe();
   if (parts[0] === 'users') return viewUsers();
+  if (parts[0] === 'delivery' && parts[1] === 'new') return viewDeliveryEdit(null, params);
+  if (parts[0] === 'delivery' && parts[1] === 'trip') return viewDeliveryEdit(Number(parts[2]), params);
+  if (parts[0] === 'delivery') return viewDelivery(params);
   if (parts[0] === 'pending') return viewPending();
   if (parts[0] === 'lots') return viewLots(params);
   if (parts[0] === 'process' && parts[1] === 'new') return viewProcessNew(params);
