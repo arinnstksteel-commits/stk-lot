@@ -83,6 +83,33 @@ async function signedUrl(path, seconds = 3600) {
   return data?.signedUrl;
 }
 
+/* ===================== สินค้า (รายการจาก FlowAccount) ===================== */
+// Supabase ส่งได้ครั้งละ 1,000 แถว จึงดึงเป็นหน้าๆ จนครบ
+let productCache = null;
+async function loadProducts() {
+  if (productCache) return productCache;
+  const all = [];
+  for (let from = 0; ; from += 1000) {
+    const page = await q(sb.from('products').select('id, code, name, category, unit').eq('active', true).order('name').range(from, from + 999));
+    all.push(...page);
+    if (page.length < 1000) break;
+  }
+  all.forEach((p) => { p._s = normText(`${p.name} ${p.code || ''}`); });
+  return (productCache = all);
+}
+// ทำให้ค้นง่าย: ตัวเล็ก ตัด ' " และช่องว่างซ้ำ ("4'x8'" -> "4x8")
+const normText = (s) => String(s).toLowerCase().replace(/['"`]/g, '').replace(/\s+/g, ' ').trim();
+// ทุกคำที่พิมพ์ต้องอยู่ในชื่อหรือรหัส (สลับลำดับได้) เช่น "2b 1.0 4x8"
+function searchProducts(list, text, limit = 15) {
+  const tokens = normText(text).split(' ').filter(Boolean);
+  if (!tokens.length) return [];
+  const hits = [];
+  for (const p of list) {
+    if (tokens.every((t) => p._s.includes(t))) { hits.push(p); if (hits.length >= limit) break; }
+  }
+  return hits;
+}
+
 /* ===================== auth ===================== */
 async function loadProfile() {
   state.profile = null;
@@ -203,20 +230,19 @@ async function viewPONew() {
     </div>
     <div class="card"><h2>รายการสินค้า</h2><div id="lines" class="list"></div>
       <button type="button" class="btn dash" id="addLine">+ เพิ่มรายการ</button></div>
-    <datalist id="prodlist"></datalist>
     <button class="btn primary block" type="submit">บันทึก PO</button>
   </form>`;
 
-  const products = await q(sb.from('products').select('id, code, name, category, unit').order('name').limit(5000)).catch((e) => (fail(e), []));
+  const products = await loadProducts().catch((e) => (fail(e), []));
   const byName = new Map(products.map((p) => [p.name, p]));
-  document.getElementById('prodlist').innerHTML = products.map((p) => `<option value="${esc(p.name)}">${esc(p.code || '')}</option>`).join('');
 
   const lines = document.getElementById('lines');
   const addLine = () => {
     const div = document.createElement('div');
     div.className = 'line';
     div.innerHTML = `<div style="display:flex;flex-direction:column;gap:8px">
-      <label class="f">สินค้า<input name="product" list="prodlist" required placeholder="พิมพ์ค้นหา เช่น แผ่น 304 2B 1.0"></label>
+      <label class="f">สินค้า<input name="product" required autocomplete="off" placeholder="พิมพ์ค้นหา เช่น 2b 1.0 4x8 หรือรหัสสินค้า"></label>
+      <div class="suggest" role="listbox" hidden></div>
       <div class="newprod" hidden>
         <p class="muted" style="margin:0">สินค้าใหม่ (ยังไม่มีในระบบ) — ระบุประเภท</p>
         <div class="grid2"><label class="f">ประเภท<select name="category">${Object.entries(CATEGORIES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}</select></label>
@@ -225,7 +251,24 @@ async function viewPONew() {
       <div class="grid2"><label class="f">จำนวนสั่ง<input name="qty" type="number" min="0.01" step="any" required inputmode="decimal"></label>
       <div style="display:flex;align-items:flex-end"><button type="button" class="btn ghost sm block rm">ลบรายการ</button></div></div></div>`;
     const inp = div.querySelector('[name=product]');
-    inp.addEventListener('change', () => { div.querySelector('.newprod').hidden = byName.has(inp.value.trim()) || !inp.value.trim(); });
+    const box = div.querySelector('.suggest');
+    const newprod = div.querySelector('.newprod');
+    const refreshNew = () => { newprod.hidden = byName.has(inp.value.trim()) || !inp.value.trim(); };
+    inp.addEventListener('input', () => {
+      const hits = searchProducts(products, inp.value);
+      box.innerHTML = hits.map((p) => `<button type="button" role="option" data-name="${esc(p.name)}">
+        <span>${esc(p.name)}</span><span class="muted mono">${esc(p.code || '')}</span></button>`).join('')
+        + (inp.value.trim() && !hits.length ? '<p class="muted" style="margin:6px 4px">ไม่พบในรายการสินค้า FlowAccount — จะสร้างเป็นสินค้าใหม่</p>' : '');
+      box.hidden = !inp.value.trim();
+      refreshNew();
+    });
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-name]');
+      if (!b) return;
+      inp.value = b.dataset.name; box.hidden = true; refreshNew();
+      div.querySelector('[name=qty]').focus();
+    });
+    inp.addEventListener('blur', () => setTimeout(() => { box.hidden = true; refreshNew(); }, 200));
     div.querySelector('.rm').onclick = () => div.remove();
     lines.appendChild(div);
   };
@@ -255,6 +298,7 @@ async function viewPONew() {
         }
         await q(sb.from('po_lines').insert({ po_id: po.id, product_id: p.id, qty_ordered: r.qty }));
       }
+      productCache = null;
       toast('บันทึก PO แล้ว');
       location.hash = '#/po/' + po.id;
     } catch (err) { fail(err); btn.disabled = false; }

@@ -91,6 +91,11 @@ input.big { font-family: var(--mono); font-size: 22px; letter-spacing: 2px; min-
 .btn.block { width: 100%; }
 .btn:disabled { opacity: .5; cursor: default; }
 
+.suggest { border: 1px solid var(--field); border-radius: 10px; background: #fff; max-height: 320px; overflow-y: auto; margin-top: -4px; }
+.suggest button { all: unset; box-sizing: border-box; width: 100%; display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; min-height: 44px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 14px; }
+.suggest button:last-child { border-bottom: 0; }
+.suggest button:hover, .suggest button:focus-visible { background: #F2F6FA; outline: none; }
+.suggest .mono { font-size: 12px; flex: none; }
 .photos { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .photos a, .photos .add { aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: #DDE1E5; display: flex; align-items: center; justify-content: center; }
 .photos img { width: 100%; height: 100%; object-fit: cover; }
