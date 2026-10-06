@@ -22,6 +22,7 @@ const ICON = {
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9H3z"/></svg>',
   box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
+  scan: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4M7 12h10"/></svg>',
   doc: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>',
   user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
 };
@@ -81,6 +82,67 @@ async function uploadLotFile(lotNo, kind, file) {
 async function signedUrl(path, seconds = 3600) {
   const { data } = await sb.storage.from('lot-files').createSignedUrl(path, seconds);
   return data?.signedUrl;
+}
+
+/* ===================== สแกน QR ด้วยกล้อง ===================== */
+// ใช้ BarcodeDetector ของเบราว์เซอร์ถ้ามี (Chrome Android) ไม่งั้นใช้ jsQR (iPhone / เบราว์เซอร์อื่น)
+function lotFromQr(text) {
+  const t = String(text || '').trim();
+  const m = t.match(/#\/lot\/(\d{1,5})/) || t.match(/^(\d{1,5})$/);
+  return m ? lotCode(m[1]) : null;
+}
+async function openScanner() {
+  const ov = document.createElement('div');
+  ov.className = 'scanner';
+  ov.innerHTML = `<video playsinline muted></video><div class="frame" aria-hidden="true"></div>
+    <p class="hint">เล็งกล้องไปที่ QR บนสติกเกอร์ Lot</p>
+    <button class="btn ghost close" type="button">ปิด</button>`;
+  document.body.appendChild(ov);
+  const video = ov.querySelector('video');
+  const hint = ov.querySelector('.hint');
+  let stream = null; let stopped = false;
+  const stop = () => { stopped = true; stream?.getTracks().forEach((t) => t.stop()); ov.remove(); };
+  ov.querySelector('.close').onclick = stop;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+  } catch (e) {
+    hint.textContent = 'เปิดกล้องไม่ได้ — กรุณาอนุญาตให้เว็บนี้ใช้กล้องในการตั้งค่าเบราว์เซอร์';
+    return;
+  }
+  if (stopped) { stream.getTracks().forEach((t) => t.stop()); return; }
+  video.srcObject = stream;
+  await video.play().catch(() => {});
+  let detect;
+  if ('BarcodeDetector' in window && (await BarcodeDetector.getSupportedFormats?.() || []).includes('qr_code')) {
+    const bd = new BarcodeDetector({ formats: ['qr_code'] });
+    detect = async () => (await bd.detect(video))[0]?.rawValue;
+  } else {
+    const { default: jsQR } = await import('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/+esm');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    detect = async () => {
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w) return null;
+      const s = Math.min(1, 720 / Math.max(w, h));
+      canvas.width = Math.round(w * s); canvas.height = Math.round(h * s);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      return jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' })?.data;
+    };
+  }
+  const loop = async () => {
+    if (stopped) return;
+    try {
+      const text = await detect();
+      if (text) {
+        const code = lotFromQr(text);
+        if (code) { navigator.vibrate?.(80); stop(); location.hash = '#/lot/' + code; return; }
+        hint.textContent = 'QR นี้ไม่ใช่สติกเกอร์ Lot ของระบบ';
+      }
+    } catch { /* เฟรมนี้อ่านไม่ได้ ลองเฟรมถัดไป */ }
+    setTimeout(loop, 180);
+  };
+  loop();
 }
 
 /* ===================== สินค้า (รายการจาก FlowAccount) ===================== */
@@ -155,13 +217,13 @@ async function viewHome() {
   app.innerHTML = `
   <header class="head dark" style="flex-direction:column;align-items:stretch;gap:14px;padding:22px 16px 18px">
     <div class="row"><div><div class="sub">STK Metal · ${esc(state.profile.full_name)} (${ROLE_TH[state.profile.role]})</div><h1 style="font-size:22px">Lot &amp; ใบเซอร์</h1></div></div>
-    <form id="qs" class="row" style="gap:8px"><input name="q" placeholder="เลข Lot / INV / ชื่อสินค้า" aria-label="ค้นหา" style="border:0"><button class="btn primary" aria-label="ค้นหา">${ICON.search}</button></form>
+    <form id="qs" class="row" style="gap:8px"><input name="q" placeholder="เลข Lot / INV / ชื่อสินค้า" aria-label="ค้นหา" style="border:0"><button class="btn primary" aria-label="ค้นหา">${ICON.search}</button><button type="button" class="btn ghost scanBtn" aria-label="สแกน QR" style="border:0">${ICON.scan}</button></form>
   </header>
   <div class="wrap">
     <div class="tiles">
       <a class="tile" href="#/po">${ICON.box}รับของ / PO</a>
       <a class="tile" href="#/search">${ICON.doc}ใบเซอร์</a>
-      <a class="tile" href="#/search?pick=1">${ICON.search}ตัดสต๊อค</a>
+      <button type="button" class="tile scanBtn" style="border:0;font:inherit;cursor:pointer">${ICON.scan}สแกน QR / ตัดสต๊อค</button>
     </div>
     <div class="card"><h2>งานค้าง</h2><div class="list" id="todo"><p class="empty">กำลังโหลด…</p></div></div>
     <div class="card"><h2>Lot ล่าสุด</h2><div class="list" id="recent"><p class="empty">กำลังโหลด…</p></div></div>
@@ -562,8 +624,8 @@ async function viewSearch(params) {
   const qv = params.get('q') || '';
   app.innerHTML = head('ค้นหา', 'เลข Lot · เลขบิล INV/NO · ชื่อสินค้า', '#/') + `
   <div class="wrap">
-    <form id="sf" class="row" style="gap:8px"><input name="q" value="${esc(qv)}" placeholder="เช่น 00003 หรือ INV2026080173" autofocus><button class="btn dark">${ICON.search}</button></form>
-    ${params.get('pick') ? '<p class="muted" style="margin:0">ตัดสต๊อค: สแกน QR บนสติกเกอร์ด้วยกล้องมือถือ หรือพิมพ์เลข Lot แล้วตัดในหน้า Lot</p>' : ''}
+    <form id="sf" class="row" style="gap:8px"><input name="q" value="${esc(qv)}" placeholder="เช่น 00003 หรือ INV2026080173" autofocus><button class="btn dark" aria-label="ค้นหา">${ICON.search}</button></form>
+    <button type="button" class="btn primary block scanBtn">${ICON.scan} สแกน QR บนสติกเกอร์</button>
     <div id="res"></div>
   </div>`;
   document.getElementById('sf').onsubmit = (e) => { e.preventDefault(); location.hash = '#/search?q=' + encodeURIComponent(new FormData(e.target).get('q')); };
@@ -665,6 +727,7 @@ async function route() {
 }
 
 window.addEventListener('hashchange', route);
+document.addEventListener('click', (e) => { if (e.target.closest('.scanBtn')) openScanner(); });
 // เรียก Supabase ต่อจาก callback ด้วย setTimeout เพื่อไม่ให้ค้าง (ข้อแนะนำของ supabase-js)
 sb.auth.onAuthStateChange((_evt, session) => {
   const changed = (session?.user?.id || null) !== (state.session?.user?.id || null);
