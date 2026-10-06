@@ -257,17 +257,19 @@ async function viewHome() {
       q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
       q(sb.from('lot_balance').select('lot_no', { count: 'exact', head: false }).eq('has_cert', false).gt('qty_on_hand', 0)),
       q(sb.from('lot_balance').select('lot_no').eq('has_photo', false).gt('qty_on_hand', 0)),
-      q(sb.from('process_jobs').select('id').eq('status', 'sent').lt('due_date', new Date().toISOString().slice(0, 10))),
+      q(sb.from('process_jobs').select('id, due_date').eq('status', 'sent')),
       q(sb.from('lot_balance').select('*').order('lot_no', { ascending: false }).limit(8)),
     ]);
+    const today = new Date().toISOString().slice(0, 10);
+    const late = overdue.filter((j) => j.due_date && j.due_date < today).length;
     const todo = [
       ['PO รอของเข้า', 'คลังกดรับของวันที่ของมาส่ง', pos.filter((p) => poStatus(p).key === 'wait').length, 'info', '#/po?f=wait'],
-      ['รับของแล้ว รอแตก Lot', 'ออฟฟิศแตก Lot + อัปโหลดเซอร์', pos.filter((p) => poStatus(p).key === 'split').length, 'warn', '#/po?f=split'],
+      ['PO ยังไม่แตก Lot', 'ออฟฟิศแตก Lot ให้ครบทุกรายการ', pos.filter((p) => poStatus(p).key === 'split').length, 'warn', '#/po?f=split'],
       ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
       ['Lot รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
       ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', '#/lots?f=nocert'],
       ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', '#/lots?f=nophoto'],
-      ['ส่งตัด/ขัด เลยกำหนด', 'งานที่ยังไม่รับคืน', overdue.length, 'bad', '#/process?f=overdue'],
+      ['ส่งตัด/ขัด ยังไม่รับคืน', late ? `เลยกำหนด ${late} งาน` : 'ติดตามจนกว่าจะรับคืน', overdue.length, late ? 'bad' : 'warn', '#/process'],
     ];
     document.getElementById('todo').innerHTML = todo.map(([t, s, n, c, href]) => {
       const inner = `<div><div>${t}</div><div class="muted">${s}</div></div><span class="chip ${n ? c : 'ok'}">${n}</span>`;
@@ -279,7 +281,7 @@ async function viewHome() {
 
 function lotItem(l) {
   return `<a class="item" href="#/lot/${l.lot_code}">
-    <div class="row"><span class="lotcode">Lot ${l.lot_code}</span><span class="muted">คงเหลือ ${num(l.qty_on_hand)}</span></div>
+    <div class="row"><span class="lotcode">Lot ${l.lot_code}</span>${l.received === false ? '<span class="chip info">รอของเข้า</span>' : `<span class="muted">คงเหลือ ${num(l.qty_on_hand)}</span>`}</div>
     <div>${esc(l.product_name)}</div>
     <div class="row" style="justify-content:flex-start;gap:6px">${l.bundle_label ? `<span class="muted">${esc(l.bundle_label)}</span>` : ''}
       <span class="chip ${l.has_cert ? 'ok' : 'warn'}">${l.has_cert ? 'มีเซอร์' : 'รอเซอร์'}</span>
@@ -288,21 +290,23 @@ function lotItem(l) {
 }
 
 /* ===================== PO ===================== */
-// สถานะ PO: รอของเข้า (คลังกดรับ) → รอแตก Lot (ออฟฟิศ) → ครบ
+// สถานะ PO: ออฟฟิศเปิด PO + แตก Lot → รอของเข้า (คลังกดรับ) → รับครบ
 function poStatus(p) {
-  if (!p.receipts.length) return { key: 'wait', label: 'รอของเข้า', chip: 'info' };
-  if (p.po_lines.some((l) => !l.lots.length)) return { key: 'split', label: 'รอแตก Lot', chip: 'warn' };
-  return { key: 'done', label: 'ครบ', chip: 'ok' };
+  if (p.po_lines.some((l) => !l.lots.length)) return { key: 'split', label: 'ยังไม่แตก Lot', chip: 'warn' };
+  const lots = p.po_lines.flatMap((l) => l.lots);
+  const got = lots.filter((x) => x.receipt_id).length;
+  if (got < lots.length) return { key: 'wait', label: got ? `รอของเข้า (มาแล้ว ${got}/${lots.length} Lot)` : 'รอของเข้า', chip: 'info' };
+  return { key: 'done', label: 'รับครบ', chip: 'ok' };
 }
-const PO_SELECT = 'id, po_no, supplier, ordered_at, receipts(id), po_lines(id, qty_ordered, lots(lot_no))';
+const PO_SELECT = 'id, po_no, supplier, ordered_at, po_lines(id, qty_ordered, lots(lot_no, receipt_id))';
 
 async function viewPOList(params = new URLSearchParams()) {
   setTabs('po');
   const f = params.get('f') || '';
-  const tabs = [['', 'ทั้งหมด'], ['wait', 'รอของเข้า'], ['split', 'รอแตก Lot'], ['done', 'ครบ']];
+  const tabs = [['', 'ทั้งหมด'], ['wait', 'รอของเข้า'], ['split', 'ยังไม่แตก Lot'], ['done', 'รับครบ']];
   app.innerHTML = head('รับของ / PO', 'ออฟฟิศเปิด PO · คลังกดรับของวันที่ของมาส่ง', '#/') + `
   <div class="wrap">
-    ${isOffice() ? '<a class="btn primary block" href="#/po/new">+ สร้างรายการรอเข้า (PO)</a>' : ''}
+    ${isOffice() ? '<a class="btn primary block" href="#/po/new">+ สร้าง PO + แตก Lot</a>' : ''}
     <div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-start">${tabs.map(([k, l]) =>
       `<a class="btn sm ${k === f ? 'dark' : 'ghost'}" href="#/po${k ? '?f=' + k : ''}">${l}</a>`).join('')}</div>
     <div class="card"><div class="list" id="pos"><p class="empty">กำลังโหลด…</p></div></div>
@@ -322,7 +326,7 @@ async function viewPOList(params = new URLSearchParams()) {
 async function viewPONew() {
   setTabs('po');
   if (!isOffice()) { app.innerHTML = head('สร้าง PO', '', '#/po') + '<div class="wrap"><p class="err">เฉพาะแอดมินและออฟฟิศ</p></div>'; return; }
-  app.innerHTML = head('สร้างรายการรอเข้า', 'ลงไว้ก่อนของมาถึง', '#/po') + `
+  app.innerHTML = head('สร้าง PO + แตก Lot', 'ลงไว้ก่อนของมาถึง · คลังกดรับวันที่ของมาส่ง', '#/po') + `
   <form class="wrap" id="poForm">
     <div class="card">
       <label class="f">เลข PO<input name="po_no" required placeholder="PO2026100001" class="mono"></label>
@@ -352,8 +356,9 @@ async function viewPONew() {
         <div class="grid2"><label class="f">ประเภท<select name="category">${Object.entries(CATEGORIES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}</select></label>
         <label class="f">รหัส FlowAccount<input name="code" placeholder="ถ้ามี"></label></div>
       </div>
-      <div class="grid2"><label class="f">จำนวนสั่ง<input name="qty" type="number" min="0.01" step="any" required inputmode="decimal"></label>
-      <div style="display:flex;align-items:flex-end"><button type="button" class="btn ghost sm block rm">ลบรายการ</button></div></div></div>`;
+      <div class="lotrows" style="display:flex;flex-direction:column;gap:8px"></div>
+      <div class="row"><span class="muted total"></span><button type="button" class="btn ghost sm rm">ลบรายการ</button></div>
+      <button type="button" class="btn dash sm addLot">+ แบ่งเพิ่มอีก Lot (คนละใบเซอร์ / ลัง / มัด)</button></div>`;
     const inp = div.querySelector('[name=product]');
     const box = div.querySelector('.suggest');
     const newprod = div.querySelector('.newprod');
@@ -374,6 +379,27 @@ async function viewPONew() {
     });
     inp.addEventListener('blur', () => setTimeout(() => { box.hidden = true; refreshNew(); }, 200));
     div.querySelector('.rm').onclick = () => div.remove();
+    const lotrows = div.querySelector('.lotrows');
+    const total = div.querySelector('.total');
+    const recalc = () => {
+      const rows = [...lotrows.children];
+      rows.forEach((r, i) => { r.querySelector('.lotn').textContent = 'Lot ที่ ' + (i + 1); r.querySelector('.rmLot').hidden = rows.length < 2; });
+      const sum = rows.reduce((a, r) => a + (Number(r.querySelector('[name=qty]').value) || 0), 0);
+      total.textContent = rows.length > 1 ? `รวม ${num(sum)} · ${rows.length} Lot` : '';
+    };
+    const addLot = () => {
+      const r = document.createElement('div');
+      r.className = 'sub-lot'; r.style.flexDirection = 'column'; r.style.alignItems = 'stretch';
+      r.innerHTML = `<div class="row"><b class="lotn muted"></b><button type="button" class="btn ghost sm rmLot">ลบ Lot</button></div>
+        <div class="grid3"><label class="f">จำนวน<input name="qty" type="number" min="0.01" step="any" required inputmode="decimal"></label>
+        <label class="f">ลัง/มัด<input name="bundle" placeholder="ลัง 1"></label>
+        <label class="f">Heat No.<input name="heat" placeholder="ถ้ารู้"></label></div>`;
+      r.querySelector('.rmLot').onclick = () => { r.remove(); recalc(); };
+      r.querySelector('[name=qty]').addEventListener('input', recalc);
+      lotrows.appendChild(r); recalc();
+    };
+    div.querySelector('.addLot').onclick = addLot;
+    addLot();
     lines.appendChild(div);
   };
   document.getElementById('addLine').onclick = addLine;
@@ -388,8 +414,12 @@ async function viewPONew() {
         name: d.querySelector('[name=product]').value.trim(),
         category: d.querySelector('[name=category]').value,
         code: d.querySelector('[name=code]').value.trim() || null,
-        qty: Number(d.querySelector('[name=qty]').value),
-      })).filter((r) => r.name && r.qty > 0);
+        lots: [...d.querySelectorAll('.lotrows > div')].map((r) => ({
+          qty: Number(r.querySelector('[name=qty]').value),
+          bundle: r.querySelector('[name=bundle]').value.trim() || null,
+          heat: r.querySelector('[name=heat]').value.trim() || null,
+        })).filter((x) => x.qty > 0),
+      })).filter((r) => r.name && r.lots.length);
       if (!rows.length) throw new Error('ใส่สินค้าอย่างน้อย 1 รายการ');
       const po = await q(sb.from('purchase_orders').insert({
         po_no: String(fd.get('po_no')).trim(), supplier: fd.get('supplier'), ordered_at: fd.get('ordered_at'), note: fd.get('note') || null,
@@ -400,10 +430,11 @@ async function viewPONew() {
           p = await q(sb.from('products').insert({ name: r.name, category: r.category, code: r.code, unit: CATEGORIES[r.category].unit }).select('id').single());
           byName.set(r.name, p);
         }
-        await q(sb.from('po_lines').insert({ po_id: po.id, product_id: p.id, qty_ordered: r.qty }));
+        const line = await q(sb.from('po_lines').insert({ po_id: po.id, product_id: p.id, qty_ordered: r.lots.reduce((a, x) => a + x.qty, 0) }).select('id').single());
+        await q(sb.from('lots').insert(r.lots.map((x) => ({ product_id: p.id, po_line_id: line.id, qty_received: x.qty, bundle_label: x.bundle, heat_no: x.heat }))));
       }
       productCache = null;
-      toast('บันทึก PO แล้ว');
+      toast('บันทึก PO และแตก Lot แล้ว');
       location.hash = '#/po/' + po.id;
     } catch (err) { fail(err); btn.disabled = false; }
   };
@@ -417,30 +448,43 @@ async function viewPO(id) {
     const lotNos = po.po_lines.flatMap((l) => l.lots.map((x) => x.lot_no));
     const certs = lotNos.length ? await q(sb.from('lot_files').select('lot_no').eq('kind', 'cert').in('lot_no', lotNos)) : [];
     const hasCert = new Set(certs.map((c) => c.lot_no));
-    const receipt = po.receipts.sort((a, b) => b.id - a.id)[0];
+    const rcById = new Map(po.receipts.map((r) => [r.id, r]));
+    const waiting = po.po_lines.flatMap((l) => l.lots.filter((x) => !x.receipt_id).map((x) => ({ ...x, name: l.products.name, unit: l.products.unit }))).sort((a, b) => a.lot_no - b.lot_no);
+    const canReceive = ['warehouse', 'admin'].includes(state.profile.role);
 
-    app.innerHTML = head(`<span class="mono">${esc(po.po_no)}</span>`, `${esc(po.supplier)} · สั่ง ${fmtDate(po.ordered_at)}${receipt ? ` · บิล ${esc(receipt.supplier_doc_no)} รับ ${fmtDate(receipt.received_at)}` : ''}`, '#/po') + `
+    app.innerHTML = head(`<span class="mono">${esc(po.po_no)}</span>`, `${esc(po.supplier)} · สั่ง ${fmtDate(po.ordered_at)}${po.receipts.length ? ' · ' + po.receipts.map((r) => `บิล ${esc(r.supplier_doc_no)} รับ ${fmtDate(r.received_at)}`).join(', ') : ''}`, '#/po') + `
     <div class="wrap">
-      ${!receipt ? (['warehouse', 'admin'].includes(state.profile.role) ? `<form class="card" id="rcForm"><h2>ของมาถึงแล้ว? บันทึกบิลรับของ</h2>
-        <p class="muted" style="margin:0">คลังกดรับวันที่ของมาส่ง · ดูเลขบิลจากใบส่งของที่มากับสินค้า</p>
+      ${waiting.length ? (canReceive ? `<form class="card" id="rcForm"><h2>ของมาถึงแล้ว? กดรับของ</h2>
+        <p class="muted" style="margin:0">ติ๊ก Lot ที่มาถึงวันนี้ · ถ้าจำนวนจริงไม่ตรง แก้ตัวเลขได้</p>
+        <div class="list">${waiting.map((x) => `<label class="row" style="gap:10px;cursor:pointer">
+          <input type="checkbox" name="lot" value="${x.lot_no}" checked style="width:22px;min-height:22px;flex:none">
+          <span style="flex:1;min-width:0"><span class="lotcode">Lot ${x.lot_code}</span>${x.bundle_label ? ' · ' + esc(x.bundle_label) : ''}<br><span class="muted">${esc(x.name)}</span></span>
+          <input name="q${x.lot_no}" type="number" step="any" min="0.01" inputmode="decimal" value="${Number(x.qty_received)}" style="width:90px;flex:none" aria-label="จำนวนที่มาจริง"></label>`).join('')}</div>
         <div class="grid2"><label class="f">เลขบิลผู้ขาย (IV / ST)<input name="doc" required class="mono" placeholder="IV6907623"></label>
         <label class="f">วันที่รับ<input name="d" type="date" value="${new Date().toISOString().slice(0, 10)}"></label></div>
-        <button class="btn dark">บันทึกการรับของ</button></form>` : '<div class="card"><div class="row"><span>สถานะ</span><span class="chip info">รอของเข้า · รอคลังกดรับของ</span></div></div>') : ''}
+        <button class="btn dark">บันทึกการรับของ</button></form>`
+        : `<div class="card"><div class="row"><span>สถานะ</span><span class="chip info">รอของเข้า ${waiting.length} Lot · รอคลังกดรับ</span></div></div>`) : ''}
       ${po.po_lines.map((l) => {
-        const got = l.lots.reduce((s, x) => s + Number(x.qty_received), 0);
+        const planned = l.lots.reduce((s, x) => s + Number(x.qty_received), 0);
         return `<div class="card">
-          <div class="row"><h2>${esc(l.products.name)}</h2><span class="muted">${num(got)}/${num(l.qty_ordered)} ${esc(l.products.unit)}</span></div>
-          ${l.lots.sort((a, b) => a.lot_no - b.lot_no).map((x) => `<div class="sub-lot">
+          <div class="row"><h2>${esc(l.products.name)}</h2><span class="muted">${num(planned)}/${num(l.qty_ordered)} ${esc(l.products.unit)}</span></div>
+          ${!l.lots.length ? '<p class="err" style="margin:0">ยังไม่แตก Lot</p>' : ''}
+          ${l.lots.sort((a, b) => a.lot_no - b.lot_no).map((x) => {
+            const rc = rcById.get(x.receipt_id);
+            return `<div class="sub-lot">
             <a href="#/lot/${x.lot_code}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:2px;min-width:0">
               <span class="lotcode">Lot ${x.lot_code}${x.bundle_label ? ' · ' + esc(x.bundle_label) : ''} · ${num(x.qty_received)}</span>
+              <span>${rc ? `<span class="chip ok">รับแล้ว ${fmtDate(rc.received_at)}</span>` : '<span class="chip info">รอของเข้า</span>'}</span>
               <span class="muted" style="color:${hasCert.has(x.lot_no) ? 'var(--ok)' : 'var(--warn)'}">${hasCert.has(x.lot_no) ? `ใบเซอร์ ✓${x.heat_no ? ' · Heat ' + esc(x.heat_no) : ''}` : 'ยังไม่มีใบเซอร์'}</span></a>
-            <div style="display:flex;gap:6px;flex:none">
+            <div style="display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end">
               ${isOffice() && !hasCert.has(x.lot_no) ? `<label class="btn primary sm">อัปโหลดเซอร์<input type="file" accept="application/pdf,image/*" hidden data-cert="${x.lot_no}"></label>` : ''}
               ${isOffice() ? `<a class="btn ghost sm" href="#/label/${x.lot_code}">สติกเกอร์</a>` : ''}
-            </div></div>`).join('')}
-          ${receipt && isOffice() ? `<details><summary class="btn dash block" style="list-style:none">+ แตก Lot (ใบเซอร์ / ลัง / มัด)</summary>
+              ${isOffice() && !rc ? `<button type="button" class="btn ghost sm" data-del="${x.lot_no}" data-code="${x.lot_code}">ลบ</button>` : ''}
+            </div></div>`;
+          }).join('')}
+          ${isOffice() ? `<details><summary class="btn dash block" style="list-style:none">+ แตกเพิ่มอีก Lot (ใบเซอร์ / ลัง / มัด)</summary>
             <form class="lotForm" data-line="${l.id}" data-product="${l.product_id}" style="display:flex;flex-direction:column;gap:8px;margin-top:10px">
-              <div class="grid3"><label class="f">จำนวน<input name="qty" type="number" step="any" min="0.01" required inputmode="decimal" value="${Math.max(0, Number(l.qty_ordered) - got) || ''}"></label>
+              <div class="grid3"><label class="f">จำนวน<input name="qty" type="number" step="any" min="0.01" required inputmode="decimal" value="${Math.max(0, Number(l.qty_ordered) - planned) || ''}"></label>
               <label class="f">ลัง/มัด<input name="bundle" placeholder="ลัง 1"></label>
               <label class="f">Heat No.<input name="heat" placeholder="จากเซอร์"></label></div>
               <button class="btn dark">สร้าง Lot</button></form></details>` : ''}
@@ -448,11 +492,18 @@ async function viewPO(id) {
       }).join('')}
     </div>`;
 
-    const rc = document.getElementById('rcForm');
-    if (rc) rc.onsubmit = async (e) => {
+    const rcf = document.getElementById('rcForm');
+    if (rcf) rcf.onsubmit = async (e) => {
       e.preventDefault();
-      const fd = new FormData(rc);
-      try { await q(sb.from('receipts').insert({ po_id: po.id, supplier_doc_no: String(fd.get('doc')).trim(), received_at: fd.get('d') })); toast(isOffice() ? 'บันทึกรับของแล้ว · แตก Lot ต่อได้เลย' : 'บันทึกรับของแล้ว · ออฟฟิศจะแตก Lot ต่อ'); viewPO(id); } catch (err) { fail(err); }
+      const fd = new FormData(rcf);
+      const items = fd.getAll('lot').map((n) => ({ lot_no: Number(n), qty: Number(fd.get('q' + n)) }));
+      if (!items.length) return toast('ติ๊ก Lot ที่ของมาถึงอย่างน้อย 1 Lot');
+      if (items.some((x) => !(x.qty > 0))) return toast('จำนวนต้องมากกว่า 0');
+      const btn = rcf.querySelector('button'); btn.disabled = true;
+      try {
+        await q(sb.rpc('receive_lots', { p_po_id: po.id, p_doc: String(fd.get('doc')).trim(), p_date: fd.get('d'), p_lots: items }));
+        toast(`รับของแล้ว ${items.length} Lot · เข้าสต๊อคแล้ว`); viewPO(id);
+      } catch (err) { fail(err); btn.disabled = false; }
     };
     app.querySelectorAll('.lotForm').forEach((f) => f.onsubmit = async (e) => {
       e.preventDefault();
@@ -460,12 +511,20 @@ async function viewPO(id) {
       f.querySelector('button').disabled = true;
       try {
         const lot = await q(sb.from('lots').insert({
-          product_id: Number(f.dataset.product), po_line_id: Number(f.dataset.line), receipt_id: receipt.id,
+          product_id: Number(f.dataset.product), po_line_id: Number(f.dataset.line),
           qty_received: Number(fd.get('qty')), bundle_label: fd.get('bundle') || null, heat_no: fd.get('heat') || null,
         }).select('lot_code').single());
         toast(`สร้าง Lot ${lot.lot_code} แล้ว`);
         viewPO(id);
       } catch (err) { fail(err); f.querySelector('button').disabled = false; }
+    });
+    app.querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => {
+      if (!confirm(`ลบ Lot ${b.dataset.code} ? (ลบได้เฉพาะ Lot ที่ยังไม่รับของ)`)) return;
+      try {
+        const gone = await q(sb.from('lots').delete().eq('lot_no', Number(b.dataset.del)).select('lot_no'));
+        if (!gone.length) throw new Error('ลบไม่ได้ (รับของแล้ว หรือไม่มีสิทธิ์)');
+        toast(`ลบ Lot ${b.dataset.code} แล้ว`); viewPO(id);
+      } catch (err) { fail(err); }
     });
     app.querySelectorAll('[data-cert]').forEach((inp) => inp.onchange = async () => {
       if (!inp.files[0]) return;
@@ -501,7 +560,7 @@ async function viewLot(code) {
       <div class="row" style="justify-content:flex-start"><a class="back" href="#/" aria-label="กลับ">${ICON.back}</a>
         <div><div class="mono" style="font-size:24px;font-weight:600">Lot ${esc(lot.lot_code)}</div>
         <div class="sub">${esc(lot.products.name)}${lot.bundle_label ? ' · ' + esc(lot.bundle_label) : ''}</div></div></div>
-      <div class="stats"><div class="stat"><small>รับเข้า</small><b>${num(lot.qty_received)}</b></div>
+      <div class="stats"><div class="stat"><small>${lot.receipt_id ? 'รับเข้า' : 'สั่ง (รอของเข้า)'}</small><b>${num(lot.qty_received)}</b></div>
         <div class="stat"><small>ขายออก</small><b>${num(sold)}</b></div>
         <div class="stat"><small>คงเหลือ</small><b style="color:#FDBA74">${num(bal.qty_on_hand)}</b></div></div>
     </header>
@@ -521,7 +580,8 @@ async function viewLot(code) {
         ${meas.length ? `<div class="list">${meas.map((m) => `<div class="row"><span>${esc(m.measure)}</span><span class="mono">${num(m.value)} ${esc(m.unit)} <span class="muted">${fmtDate(m.created_at)}</span></span></div>`).join('')}</div>` : ''}
       </div>
 
-      <div class="card"><h2>ตัดสต๊อคจาก Lot นี้</h2>
+      ${!lot.receipt_id ? '<div class="card"><div class="row"><span>สถานะ</span><span class="chip info">รอของเข้า · ยังตัดสต๊อคไม่ได้</span></div><p class="muted" style="margin:0">คลังกดรับของที่หน้า PO เมื่อของมาถึง</p></div>' : ''}
+      <div class="card" ${lot.receipt_id ? '' : 'hidden'}><h2>ตัดสต๊อคจาก Lot นี้</h2>
         <form id="cutForm" style="display:flex;flex-direction:column;gap:8px">
           <label class="f">จำนวน<input name="qty" type="number" min="0.01" step="any" required inputmode="decimal" class="big"></label>
           <div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" class="mono" placeholder="ไม่รู้ เว้นว่างได้"></label>
@@ -585,7 +645,7 @@ async function viewLabel(codeParam) {
           <div class="top"><span>STK METAL</span><span>LOT</span></div>
           <div class="mid"><div style="flex:1;min-width:0"><div class="code">${esc(lot.lot_code)}</div><div class="name">${esc(lot.products.name)}</div></div>
             <img class="qr" src="${qrs[i]}" alt="QR Lot ${esc(lot.lot_code)}"></div>
-          <div class="bot"><span>รับ ${fmtDate(lot.receipts?.received_at)}</span><span>${esc(lot.bundle_label || '')}</span><span>${num(lot.qty_received)} ${esc(lot.products.unit)}</span></div>
+          <div class="bot"><span>${lot.receipts ? 'รับ ' + fmtDate(lot.receipts.received_at) : ''}</span><span>${esc(lot.bundle_label || '')}</span><span>${num(lot.qty_received)} ${esc(lot.products.unit)}</span></div>
         </div>`).join('')}
       <button class="btn primary block noprint" style="max-width:420px" id="printBtn">พิมพ์${lots.length > 1 ? 'ทั้งหมด' : ''}</button>
       <p class="muted noprint" style="max-width:420px">ตั้งค่าเครื่องพิมพ์เป็นกระดาษ 75×50 มม. ขอบ 0 · พิมพ์เสร็จแล้วระบบจะถามเพื่อเอาออกจากงานค้าง</p>

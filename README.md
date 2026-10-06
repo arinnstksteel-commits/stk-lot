@@ -22,3 +22,4 @@
 4. `supabase/004_flowaccount_products.sql`
 5. `supabase/005_pending_bill.sql`
 6. `supabase/006_label_printed.sql`
+7. `supabase/007_lots_at_po.sql`
