@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES } from './config.js?v=20261006172407';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261006172407';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES } from './config.js?v=20261006173013';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261006173013';
 
 initI18n();
 
@@ -991,7 +991,7 @@ function viewMe() {
 const VEHICLE_TYPES = ['กระบะ', 'กระบะคอก', 'รถ 4 ล้อใหญ่', 'รถ 6 ล้อ', 'รถ 10 ล้อ', 'เทรลเลอร์', 'รถลูกค้ามารับ'];
 const isoDay = (d) => { const x = new Date(d); x.setMinutes(x.getMinutes() - x.getTimezoneOffset()); return x.toISOString().slice(0, 10); };
 const shiftDay = (day, n) => { const d = new Date(day + 'T00:00:00'); d.setDate(d.getDate() + n); return isoDay(d); };
-const dayLabel = (day) => new Date(day + 'T00:00:00').toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' });
+const dayLabel = (day) => new Date(day + 'T00:00:00').toLocaleDateString(getLang() === 'my' ? 'my-MM' : 'th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: '2-digit' });
 // ลิงก์แผนที่: ถ้าเป็นลิงก์อยู่แล้วใช้เลย ไม่งั้นค้นใน Google Maps
 const mapUrl = (loc) => /^https?:\/\//i.test(loc) ? loc : 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(loc);
 
