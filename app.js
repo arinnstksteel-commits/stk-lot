@@ -224,6 +224,7 @@ async function viewHome() {
       <a class="tile" href="#/po">${ICON.box}รับของ / PO</a>
       <a class="tile" href="#/search">${ICON.doc}ใบเซอร์</a>
       <button type="button" class="tile scanBtn" style="border:0;font:inherit;cursor:pointer">${ICON.scan}สแกน QR / ตัดสต๊อค</button>
+      <a class="tile" href="#/process"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>On Process</a>
     </div>
     <div class="card"><h2>งานค้าง</h2><div class="list" id="todo"><p class="empty">กำลังโหลด…</p></div></div>
     <div class="card"><h2>Lot ล่าสุด</h2><div class="list" id="recent"><p class="empty">กำลังโหลด…</p></div></div>
@@ -245,9 +246,9 @@ async function viewHome() {
       ['รับของแล้ว รอแตก Lot', 'ออฟฟิศแตก Lot + อัปโหลดเซอร์', pos.filter((p) => poStatus(p).key === 'split').length, 'warn', '#/po?f=split'],
       ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
       ['Lot รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
-      ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', ''],
-      ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', ''],
-      ['ส่งตัด/ขัด เลยกำหนด', 'งานที่ยังไม่รับคืน', overdue.length, 'bad', ''],
+      ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', '#/lots?f=nocert'],
+      ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', '#/lots?f=nophoto'],
+      ['ส่งตัด/ขัด เลยกำหนด', 'งานที่ยังไม่รับคืน', overdue.length, 'bad', '#/process?f=overdue'],
     ];
     document.getElementById('todo').innerHTML = todo.map(([t, s, n, c, href]) => {
       const inner = `<div><div>${t}</div><div class="muted">${s}</div></div><span class="chip ${n ? c : 'ok'}">${n}</span>`;
@@ -512,7 +513,7 @@ async function viewLot(code) {
 
       <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div></div><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b></div>`).join('')}</div></div>
 
-      ${isOffice() ? `<a class="btn ghost block" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a>` : ''}
+      ${isOffice() ? `<div class="grid2"><a class="btn ghost" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a><a class="btn ghost" href="#/process/new?lot=${esc(lot.lot_code)}">ส่งตัด / ขัด</a></div>` : ''}
     </div>`;
 
     app.querySelectorAll('[data-open]').forEach((b) => b.onclick = async () => { const u = await signedUrl(b.dataset.open, 600); if (u) window.open(u, '_blank', 'noopener'); });
@@ -693,6 +694,129 @@ async function viewPending() {
   } catch (e) { fail(e); }
 }
 
+/* ===================== รายการ Lot ตามเงื่อนไข (รอเซอร์ / รอรูปวัด) ===================== */
+async function viewLots(params) {
+  setTabs('home');
+  const f = params.get('f');
+  const title = f === 'nocert' ? 'Lot รอใบเซอร์' : f === 'nophoto' ? 'Lot รอรูปวัดขนาด' : 'Lot ทั้งหมด';
+  const sub = f === 'nocert' ? 'ออฟฟิศอัปโหลดใบเซอร์' : f === 'nophoto' ? 'คลังถ่ายรูปวัด + กรอกค่าวัด' : 'Lot ที่ยังมีของ';
+  app.innerHTML = head(title, sub, '#/') + '<p class="loading">กำลังโหลด…</p>';
+  try {
+    let qb = sb.from('lot_balance').select('*').gt('qty_on_hand', 0).order('lot_no');
+    if (f === 'nocert') qb = qb.eq('has_cert', false);
+    if (f === 'nophoto') qb = qb.eq('has_photo', false);
+    const lots = await q(qb.limit(500));
+    app.innerHTML = head(title, `${lots.length} Lot · ${sub}`, '#/') + `<div class="wrap"><div class="card"><div class="list">
+      ${lots.length ? lots.map(lotItem).join('') : '<p class="empty">ไม่มีรายการค้าง 🎉</p>'}</div></div></div>`;
+  } catch (e) { fail(e); }
+}
+
+/* ===================== On Process (ส่งตัด / เจาะ / ขัด) ===================== */
+const TASKS = ['ตัด', 'เจาะรู', 'ขัด HL', 'ขัด NO.8', 'พับ', 'อื่นๆ'];
+async function viewProcess(params) {
+  setTabs('home');
+  const f = params.get('f') || 'open';
+  const today = new Date().toISOString().slice(0, 10);
+  const tabs = [['open', 'กำลังทำ'], ['overdue', 'เลยกำหนด'], ['returned', 'รับคืนแล้ว']];
+  app.innerHTML = head('On Process', 'งานส่งตัด / เจาะ / ขัด', '#/') + `
+  <div class="wrap">
+    ${isOffice() ? '<a class="btn primary block" href="#/process/new">+ ส่งงานใหม่</a>' : ''}
+    <div class="row" style="gap:6px;justify-content:flex-start">${tabs.map(([k, l]) => `<a class="btn sm ${k === f ? 'dark' : 'ghost'}" href="#/process?f=${k}">${l}</a>`).join('')}</div>
+    <div id="jobs"><p class="loading">กำลังโหลด…</p></div>
+  </div>`;
+  try {
+    let qb = sb.from('process_jobs').select('*, lots(lot_code, products(name, unit))').order('due_date', { ascending: true, nullsFirst: false });
+    if (f === 'returned') qb = qb.eq('status', 'returned').order('returned_at', { ascending: false });
+    else qb = qb.eq('status', 'sent');
+    if (f === 'overdue') qb = qb.lt('due_date', today);
+    const jobs = await q(qb.limit(200));
+    const box = document.getElementById('jobs');
+    box.innerHTML = jobs.length ? jobs.map((j) => {
+      const late = j.status === 'sent' && j.due_date && j.due_date < today;
+      const days = late ? Math.round((new Date(today) - new Date(j.due_date)) / 86400000) : 0;
+      const chip = j.status === 'returned' ? `<span class="chip ok">รับคืน ${fmtDate(j.returned_at)}</span>`
+        : late ? `<span class="chip bad">เลยกำหนด ${days} วัน</span>` : `<span class="chip info">กำลังทำ</span>`;
+      return `<div class="card" style="${late ? 'outline:2px solid #FCA5A5' : ''}">
+        <div class="row">${chip}<span class="muted">ส่ง ${fmtDate(j.sent_at)}</span></div>
+        <div><b>${esc(j.tasks.join(' + '))}</b> · ${esc(j.lots.products.name)} × ${num(j.qty)} ${esc(j.lots.products.unit)}</div>
+        <div class="muted">ส่งไป ${esc(j.vendor || '-')} · กำหนดรับ ${j.due_date ? fmtDate(j.due_date) : '-'}</div>
+        <div class="muted">${j.ref_doc ? 'ของลูกค้า ' + esc(j.ref_doc) : 'เติมสต๊อค'} · <a class="lotcode" href="#/lot/${j.lots.lot_code}">Lot ${j.lots.lot_code}</a>${j.detail ? ' · ' + esc(j.detail) : ''}</div>
+        ${j.status === 'sent' && isOffice() ? `<div class="grid2">
+          <button class="btn ghost sm" data-due="${j.id}">เลื่อนวันกำหนด</button>
+          <button class="btn dark sm" data-ret="${j.id}">รับคืนแล้ว</button></div>` : ''}
+      </div>`;
+    }).join('') : '<div class="card"><p class="empty">ไม่มีรายการ</p></div>';
+    box.querySelectorAll('[data-ret]').forEach((b) => b.onclick = async () => {
+      const j = jobs.find((x) => x.id === Number(b.dataset.ret));
+      if (!confirm(`รับคืน ${j.tasks.join(' + ')} Lot ${j.lots.lot_code} × ${num(j.qty)} ?`)) return;
+      b.disabled = true;
+      try {
+        await q(sb.from('stock_moves').insert({ lot_no: j.lot_no, kind: 'process_in', qty: Number(j.qty), doc_no: j.ref_doc, note: 'รับคืนจาก ' + (j.vendor || 'process') }));
+        await q(sb.from('process_jobs').update({ status: 'returned', returned_at: new Date().toISOString() }).eq('id', j.id));
+        toast('บันทึกรับคืนแล้ว'); viewProcess(params);
+      } catch (e) { fail(e); b.disabled = false; }
+    });
+    box.querySelectorAll('[data-due]').forEach((b) => b.onclick = async () => {
+      const d = prompt('กำหนดรับคืนใหม่ (ปี-เดือน-วัน เช่น 2026-10-20)', today);
+      if (!d) return;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return toast('รูปแบบวันที่ไม่ถูกต้อง');
+      try { await q(sb.from('process_jobs').update({ due_date: d }).eq('id', Number(b.dataset.due))); toast('เลื่อนวันแล้ว'); viewProcess(params); } catch (e) { fail(e); }
+    });
+  } catch (e) { fail(e); }
+}
+
+async function viewProcessNew(params) {
+  setTabs('home');
+  if (!isOffice()) { app.innerHTML = head('ส่งงาน', '', '#/process') + '<div class="wrap"><p class="err">การส่งงาน process เป็นหน้าที่ออฟฟิศ</p></div>'; return; }
+  app.innerHTML = head('ส่งงานตัด / เจาะ / ขัด', 'ของจะย้ายไป On Process ไม่หายจากสต๊อค', '#/process') + `
+  <form class="wrap" id="pf">
+    <div class="card">
+      <div class="grid2"><label class="f">เลข Lot<input name="lot" required class="big" inputmode="numeric" value="${esc(params.get('lot') || '')}"></label>
+      <label class="f">จำนวน<input name="qty" required type="number" min="0.01" step="any" class="big" inputmode="decimal"></label></div>
+      <p class="muted" id="lotInfo" style="margin:0"></p>
+      <div class="f" style="font-size:13px;color:var(--muted)">งานที่ส่ง (เลือกได้หลายอย่าง)</div>
+      <div class="row" style="flex-wrap:wrap;justify-content:flex-start;gap:8px">${TASKS.map((t) =>
+        `<label class="btn ghost sm" style="gap:6px"><input type="checkbox" name="t" value="${t}" style="width:18px;min-height:18px"> ${t}</label>`).join('')}</div>
+      <label class="f">รายละเอียดงาน<textarea name="detail" rows="2" placeholder="เช่น ตัด 600 มม. × 4 ชิ้น / เจาะรู 3 มม."></textarea></label>
+    </div>
+    <div class="card">
+      <label class="f">ส่งไปที่<input name="vendor" required placeholder="ชื่อร้าน / สาขาใหญ่"></label>
+      <div class="grid2"><label class="f">กำหนดรับคืน<input name="due" type="date" required></label>
+      <label class="f">ของลูกค้า (บิล/QT)<input name="ref" class="mono" placeholder="ว่าง = เติมสต๊อค"></label></div>
+    </div>
+    <button class="btn primary block">บันทึกส่งงาน</button>
+  </form>`;
+  const form = document.getElementById('pf');
+  const info = document.getElementById('lotInfo');
+  let lot = null;
+  const lookup = async () => {
+    const v = form.lot.value.trim(); lot = null; info.textContent = '';
+    if (!/^\d{1,5}$/.test(v)) return;
+    const r = await q(sb.from('lot_balance').select('*').eq('lot_code', lotCode(v)).maybeSingle()).catch(() => null);
+    if (!r) { info.textContent = 'ไม่พบ Lot นี้'; return; }
+    lot = r; info.textContent = `${r.product_name} · คงเหลือ ${num(r.qty_on_hand)}`;
+  };
+  form.lot.addEventListener('change', lookup);
+  lookup();
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    await lookup();
+    if (!lot) return toast('กรุณาใส่เลข Lot ให้ถูกต้อง');
+    const fd = new FormData(form);
+    const tasks = fd.getAll('t');
+    const qty = Number(fd.get('qty'));
+    if (!tasks.length) return toast('เลือกงานอย่างน้อย 1 อย่าง');
+    if (qty > Number(lot.qty_on_hand)) return toast(`Lot นี้เหลือ ${num(lot.qty_on_hand)}`);
+    form.querySelector('button.primary').disabled = true;
+    try {
+      const ref = String(fd.get('ref') || '').trim().toUpperCase() || null;
+      await q(sb.from('stock_moves').insert({ lot_no: lot.lot_no, kind: 'process_out', qty: -qty, doc_no: ref, note: tasks.join(' + ') + ' → ' + fd.get('vendor') }));
+      await q(sb.from('process_jobs').insert({ lot_no: lot.lot_no, qty, tasks, detail: fd.get('detail') || null, vendor: fd.get('vendor'), due_date: fd.get('due'), ref_doc: ref }));
+      toast('บันทึกส่งงานแล้ว'); location.hash = '#/process';
+    } catch (err) { fail(err); form.querySelector('button.primary').disabled = false; }
+  };
+}
+
 /* ===================== บัญชี ===================== */
 function viewMe() {
   setTabs('me');
@@ -723,6 +847,9 @@ async function route() {
   if (parts[0] === 'search') return viewSearch(params);
   if (parts[0] === 'me') return viewMe();
   if (parts[0] === 'pending') return viewPending();
+  if (parts[0] === 'lots') return viewLots(params);
+  if (parts[0] === 'process' && parts[1] === 'new') return viewProcessNew(params);
+  if (parts[0] === 'process') return viewProcess(params);
   return viewHome();
 }
 

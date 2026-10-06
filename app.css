@@ -64,7 +64,7 @@ a.item { text-decoration: none; color: inherit; display: flex; flex-direction: c
 .stat small { display: block; font-size: 11px; color: #B8C2CC; }
 .stat b { font-size: 18px; }
 
-.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .tile { background: var(--card); border-radius: 12px; padding: 14px 6px; text-align: center; text-decoration: none; color: var(--ink); font-size: 13px; font-weight: 500; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 .tile svg { width: 26px; height: 26px; stroke: var(--accent); }
 
