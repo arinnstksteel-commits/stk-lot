@@ -94,6 +94,23 @@ function lotFromQr(text) {
   const m = t.match(/#\/lot\/(\d{1,5})/) || t.match(/^(\d{1,5})$/);
   return m ? lotCode(m[1]) : null;
 }
+// อ่าน QR จากรูปถ่าย (ใช้ได้แม้กล้องสดเปิดไม่ได้)
+async function readQrFromImage(file) {
+  const bmp = await createImageBitmap(file);
+  if ('BarcodeDetector' in window) {
+    try { const r = await new BarcodeDetector({ formats: ['qr_code'] }).detect(bmp); if (r[0]) return r[0].rawValue; } catch { /* ใช้ jsQR ต่อ */ }
+  }
+  const { default: jsQR } = await import('https://cdn.jsdelivr.net/npm/jsqr@1.4.0/+esm');
+  for (const max of [1000, 1600, 700]) {
+    const sc = Math.min(1, max / Math.max(bmp.width, bmp.height));
+    const c = document.createElement('canvas'); c.width = Math.round(bmp.width * sc); c.height = Math.round(bmp.height * sc);
+    const ctx = c.getContext('2d'); ctx.drawImage(bmp, 0, 0, c.width, c.height);
+    const img = ctx.getImageData(0, 0, c.width, c.height);
+    const hit = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+    if (hit) return hit.data;
+  }
+  return null;
+}
 async function openScanner() {
   const ov = document.createElement('div');
   ov.className = 'scanner';
@@ -106,10 +123,39 @@ async function openScanner() {
   let stream = null; let stopped = false;
   const stop = () => { stopped = true; stream?.getTracks().forEach((t) => t.stop()); ov.remove(); };
   ov.querySelector('.close').onclick = stop;
+  const photoBtn = document.createElement('label');
+  photoBtn.className = 'btn primary';
+  photoBtn.style.cssText = 'position:absolute;bottom:calc(90px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);min-width:220px';
+  photoBtn.innerHTML = 'ถ่ายรูป QR แทน<input type="file" accept="image/*" capture="environment" hidden>';
+  ov.appendChild(photoBtn);
+  photoBtn.querySelector('input').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    hint.textContent = 'กำลังอ่าน QR จากรูป…';
+    try {
+      const text = await readQrFromImage(f);
+      const code = lotFromQr(text);
+      if (code) { stop(); location.hash = '#/lot/' + code; return; }
+      hint.textContent = text ? 'QR นี้ไม่ใช่สติกเกอร์ Lot ของระบบ' : 'อ่าน QR ในรูปไม่ได้ ลองถ่ายใกล้ขึ้นและให้ชัด';
+    } catch { hint.textContent = 'อ่าน QR ในรูปไม่ได้ ลองถ่ายใหม่'; }
+  };
+  const inApp = /Line\/|FBAN|FBAV|Instagram|wv\)/i.test(navigator.userAgent);
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    if (!navigator.mediaDevices?.getUserMedia) throw Object.assign(new Error('nomedia'), { name: 'NoMedia' });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    } catch (e1) {
+      if (e1.name === 'NotAllowedError') throw e1;
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    }
   } catch (e) {
-    hint.textContent = 'เปิดกล้องไม่ได้ — กรุณาอนุญาตให้เว็บนี้ใช้กล้องในการตั้งค่าเบราว์เซอร์';
+    const why = {
+      NotAllowedError: inApp ? 'เปิดผ่านแอป LINE/Facebook ใช้กล้องสดไม่ได้ — กด ⋮ แล้วเลือก "เปิดใน Chrome" หรือใช้ปุ่มถ่ายรูปด้านล่าง'
+        : 'ถูกปิดสิทธิ์กล้อง — เช็คทั้ง 2 ที่: (1) Chrome: แตะไอคอนหน้าลิงก์ → สิทธิ์ → กล้อง → อนุญาต (2) ตั้งค่ามือถือ → แอป → Chrome → สิทธิ์ → กล้อง → อนุญาต',
+      NotReadableError: 'กล้องถูกแอปอื่นใช้อยู่ (เช่น LINE วิดีโอคอล / แอปกล้อง) — ปิดแอปนั้นแล้วลองใหม่',
+      NotFoundError: 'ไม่พบกล้องในเครื่องนี้',
+      NoMedia: inApp ? 'เปิดผ่านแอป LINE/Facebook ใช้กล้องสดไม่ได้ — กด ⋮ แล้วเลือก "เปิดใน Chrome" หรือใช้ปุ่มถ่ายรูปด้านล่าง' : 'เบราว์เซอร์นี้ไม่รองรับกล้องสด — ใช้ปุ่มถ่ายรูปด้านล่าง',
+    }[e.name] || `เปิดกล้องไม่ได้ (${e.name || e.message}) — ใช้ปุ่มถ่ายรูปด้านล่างแทนได้`;
+    hint.textContent = why;
     return;
   }
   if (stopped) { stream.getTracks().forEach((t) => t.stop()); return; }
