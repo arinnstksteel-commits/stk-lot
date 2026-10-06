@@ -21,3 +21,4 @@
 3. `supabase/003_process_office.sql`
 4. `supabase/004_flowaccount_products.sql`
 5. `supabase/005_pending_bill.sql`
+6. `supabase/006_label_printed.sql`

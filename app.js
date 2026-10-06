@@ -169,7 +169,8 @@ async function viewHome() {
   document.getElementById('qs').onsubmit = (e) => { e.preventDefault(); const v = new FormData(e.target).get('q'); location.hash = '#/search?q=' + encodeURIComponent(v); };
 
   try {
-    const [noBill, noCert, noPhoto, overdue, recent] = await Promise.all([
+    const [noLabel, noBill, noCert, noPhoto, overdue, recent] = await Promise.all([
+      q(sb.from('lots').select('lot_no').is('label_printed_at', null)),
       q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
       q(sb.from('lot_balance').select('lot_no', { count: 'exact', head: false }).eq('has_cert', false).gt('qty_on_hand', 0)),
       q(sb.from('lot_balance').select('lot_no').eq('has_photo', false).gt('qty_on_hand', 0)),
@@ -178,6 +179,7 @@ async function viewHome() {
     ]);
     const todo = [
       ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
+      ['Lot รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
       ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', ''],
       ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', ''],
       ['ส่งตัด/ขัด เลยกำหนด', 'งานที่ยังไม่รับคืน', overdue.length, 'bad', ''],
@@ -465,31 +467,74 @@ async function viewLot(code) {
 }
 
 /* ===================== สติกเกอร์ ===================== */
-async function viewLabel(code) {
+// รองรับหลาย Lot ในครั้งเดียว: #/label/00001,00002
+async function viewLabel(codeParam) {
   setTabs(null);
+  const codes = codeParam.split(',').map((c) => lotCode(c.trim())).filter(Boolean);
   try {
-    const lot = await q(sb.from('lots').select('lot_code, qty_received, bundle_label, products(name, unit), receipts(received_at)').eq('lot_code', code).single());
-    const qr = await QRCode.toDataURL(`${baseUrl()}#/lot/${lot.lot_code}`, { margin: 0, width: 300, errorCorrectionLevel: 'M' });
-    app.innerHTML = `<div class="noprint">${head('สติกเกอร์ Lot ' + esc(code), 'ขนาด 75×50 มม.', '#/lot/' + esc(code))}</div>
+    const lots = await q(sb.from('lots').select('lot_no, lot_code, qty_received, bundle_label, label_printed_at, products(name, unit), receipts(received_at)').in('lot_code', codes).order('lot_no'));
+    if (!lots.length) { app.innerHTML = head('สติกเกอร์', '', '#/') + '<div class="wrap"><p class="err">ไม่พบ Lot</p></div>'; return; }
+    const qrs = await Promise.all(lots.map((l) => QRCode.toDataURL(`${baseUrl()}#/lot/${l.lot_code}`, { margin: 0, width: 300, errorCorrectionLevel: 'M' })));
+    const back = lots.length === 1 ? '#/lot/' + lots[0].lot_code : '#/labels';
+    app.innerHTML = `<div class="noprint">${head(lots.length === 1 ? 'สติกเกอร์ Lot ' + esc(lots[0].lot_code) : `สติกเกอร์ ${lots.length} Lot`, 'ขนาด 75×50 มม.', back)}</div>
     <div class="label-sheet">
-      <div class="label">
-        <div class="top"><span>STK METAL</span><span>LOT</span></div>
-        <div class="mid"><div style="flex:1;min-width:0"><div class="code">${esc(lot.lot_code)}</div><div class="name">${esc(lot.products.name)}</div></div>
-          <img class="qr" src="${qr}" alt="QR Lot ${esc(lot.lot_code)}"></div>
-        <div class="bot"><span>รับ ${fmtDate(lot.receipts?.received_at)}</span><span>${esc(lot.bundle_label || '')}</span><span>${num(lot.qty_received)} ${esc(lot.products.unit)}</span></div>
-      </div>
-      <div class="noprint" style="display:flex;gap:10px;width:100%;max-width:420px">
-        <label class="f" style="width:110px">จำนวนดวง<input id="copies" type="number" min="1" max="50" value="1"></label>
-        <button class="btn primary" style="flex:1;align-self:flex-end" id="printBtn">พิมพ์</button></div>
-      <p class="muted noprint" style="max-width:420px">ตั้งค่าเครื่องพิมพ์เป็นกระดาษ 75×50 มม. ขอบ 0 · ถ้าสติกเกอร์ไม่ใช่ขนาดนี้ แจ้งเพื่อปรับแบบ</p>
+      ${lots.map((lot, i) => `<div class="noprint row" style="width:100%;max-width:420px">
+          <span class="lotcode">Lot ${esc(lot.lot_code)}</span>
+          ${lot.label_printed_at ? `<span class="chip ok">พิมพ์แล้ว ${fmtDate(lot.label_printed_at)}</span>` : '<span class="chip warn">ยังไม่พิมพ์</span>'}
+          <label class="f" style="width:96px">จำนวนดวง<input type="number" min="1" max="50" value="1" data-copies="${i}"></label></div>
+        <div class="label" data-label="${i}">
+          <div class="top"><span>STK METAL</span><span>LOT</span></div>
+          <div class="mid"><div style="flex:1;min-width:0"><div class="code">${esc(lot.lot_code)}</div><div class="name">${esc(lot.products.name)}</div></div>
+            <img class="qr" src="${qrs[i]}" alt="QR Lot ${esc(lot.lot_code)}"></div>
+          <div class="bot"><span>รับ ${fmtDate(lot.receipts?.received_at)}</span><span>${esc(lot.bundle_label || '')}</span><span>${num(lot.qty_received)} ${esc(lot.products.unit)}</span></div>
+        </div>`).join('')}
+      <button class="btn primary block noprint" style="max-width:420px" id="printBtn">พิมพ์${lots.length > 1 ? 'ทั้งหมด' : ''}</button>
+      <p class="muted noprint" style="max-width:420px">ตั้งค่าเครื่องพิมพ์เป็นกระดาษ 75×50 มม. ขอบ 0 · พิมพ์เสร็จแล้วระบบจะถามเพื่อเอาออกจากงานค้าง</p>
     </div>`;
-    document.getElementById('printBtn').onclick = () => {
-      const n = Math.min(50, Math.max(1, Number(document.getElementById('copies').value) || 1));
+    document.getElementById('printBtn').onclick = async () => {
       const sheet = app.querySelector('.label-sheet');
-      const one = sheet.querySelector('.label');
       sheet.querySelectorAll('.label.copy').forEach((c) => c.remove());
-      for (let i = 1; i < n; i++) { const c = one.cloneNode(true); c.classList.add('copy'); one.after(c); }
+      lots.forEach((_, i) => {
+        const n = Math.min(50, Math.max(1, Number(sheet.querySelector(`[data-copies="${i}"]`).value) || 1));
+        const one = sheet.querySelector(`[data-label="${i}"]`);
+        for (let k = 1; k < n; k++) { const c = one.cloneNode(true); c.classList.add('copy'); c.removeAttribute('data-label'); one.after(c); }
+      });
       window.print();
+      const pending = lots.filter((l) => !l.label_printed_at);
+      if (pending.length && confirm('พิมพ์สติกเกอร์ออกมาเรียบร้อยแล้ว?\nกด OK เพื่อเอาออกจากงานค้าง "รอพิมพ์สติกเกอร์"')) {
+        try {
+          await q(sb.from('lots').update({ label_printed_at: new Date().toISOString(), label_printed_by: state.session.user.id }).in('lot_no', pending.map((l) => l.lot_no)));
+          toast('บันทึกว่าพิมพ์แล้ว');
+          location.hash = lots.length === 1 ? '#/lot/' + lots[0].lot_code : '#/labels';
+        } catch (e) { fail(e); }
+      }
+    };
+  } catch (e) { fail(e); }
+}
+
+/* ===================== งานค้าง: รอพิมพ์สติกเกอร์ ===================== */
+async function viewLabels() {
+  setTabs('home');
+  app.innerHTML = head('รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', '#/') + '<p class="loading">กำลังโหลด…</p>';
+  try {
+    const lots = await q(sb.from('lots').select('lot_code, qty_received, bundle_label, created_at, products(name, unit)').is('label_printed_at', null).order('lot_no'));
+    app.innerHTML = head('รอพิมพ์สติกเกอร์', `${lots.length} Lot · ออฟฟิศพิมพ์แล้วส่งให้คลังติด`, '#/') + `
+    <form class="wrap" id="lf">
+      ${lots.length ? `<div class="card"><label class="row" style="justify-content:flex-start;gap:10px"><input type="checkbox" id="all" checked style="width:22px;min-height:22px"> <b>เลือกทั้งหมด</b></label>
+        <div class="list">${lots.map((l) => `<label class="row" style="justify-content:flex-start;gap:12px">
+          <input type="checkbox" name="c" value="${l.lot_code}" checked style="width:22px;min-height:22px;flex:none">
+          <span style="display:flex;flex-direction:column;min-width:0"><span class="lotcode">Lot ${l.lot_code}${l.bundle_label ? ' · ' + esc(l.bundle_label) : ''}</span>
+          <span>${esc(l.products.name)} · ${num(l.qty_received)} ${esc(l.products.unit)}</span><span class="muted">สร้าง ${fmtDate(l.created_at)}</span></span></label>`).join('')}</div></div>
+        ${isOffice() ? '<button class="btn primary block">พิมพ์ที่เลือก</button>' : '<p class="muted">การพิมพ์สติกเกอร์เป็นหน้าที่ออฟฟิศ</p>'}`
+      : '<div class="card"><p class="empty">พิมพ์ครบทุก Lot แล้ว 🎉</p></div>'}
+    </form>`;
+    const all = document.getElementById('all');
+    if (all) all.onchange = () => app.querySelectorAll('[name=c]').forEach((c) => { c.checked = all.checked; });
+    document.getElementById('lf').onsubmit = (e) => {
+      e.preventDefault();
+      const codes = [...app.querySelectorAll('[name=c]:checked')].map((c) => c.value);
+      if (!codes.length) return toast('ยังไม่ได้เลือก Lot');
+      location.hash = '#/label/' + codes.join(',');
     };
   } catch (e) { fail(e); }
 }
@@ -594,7 +639,8 @@ async function route() {
   if (parts[0] === 'po' && parts[1] === 'new') return viewPONew();
   if (parts[0] === 'po') return viewPO(Number(parts[1]));
   if (parts[0] === 'lot' && parts[1]) return viewLot(lotCode(parts[1]));
-  if (parts[0] === 'label' && parts[1]) return viewLabel(lotCode(parts[1]));
+  if (parts[0] === 'label' && parts[1]) return viewLabel(parts[1]);
+  if (parts[0] === 'labels') return viewLabels();
   if (parts[0] === 'search') return viewSearch(params);
   if (parts[0] === 'me') return viewMe();
   if (parts[0] === 'pending') return viewPending();
