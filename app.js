@@ -214,6 +214,22 @@ function viewNoRole() {
   document.getElementById('lo').onclick = () => sb.auth.signOut();
 }
 
+/* ===================== ติดตั้งเป็นแอป (PWA) ===================== */
+let installPrompt = null;
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; if (location.hash.startsWith('#/me')) route(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; toast('ติดตั้งแอปแล้ว'); });
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+function installCardHtml() {
+  if (isStandalone()) return '';
+  if (installPrompt) return `<button class="btn primary block installBtn">ติดตั้งแอปลงมือถือ</button>`;
+  const how = isIOS()
+    ? 'เปิดใน Safari → กดปุ่มแชร์ (สี่เหลี่ยมลูกศรขึ้น) → "เพิ่มไปยังหน้าจอโฮม"'
+    : 'เปิดใน Chrome → กดเมนู ⋮ มุมขวาบน → "ติดตั้งแอป" หรือ "เพิ่มลงในหน้าจอหลัก"';
+  return `<div class="card"><h2>ติดตั้งเป็นแอป</h2><div class="muted">${how}</div></div>`;
+}
+
 /* ===================== หน้าแรก ===================== */
 async function viewHome() {
   setTabs('home');
@@ -829,7 +845,7 @@ function viewMe() {
     <div class="row"><span>บทบาท</span><b>${ROLE_TH[state.profile.role]}</b></div>
     <div class="row"><span>ภาษา</span>${langToggleHtml()}</div>
     <div class="row"><span>ชื่อผู้ใช้</span><span class="mono">${esc(state.session.user.email.replace('@' + EMAIL_DOMAIN, ''))}</span></div>
-  </div><button class="btn ghost block" id="lo">ออกจากระบบ</button></div>`;
+  </div>${installCardHtml()}<button class="btn ghost block" id="lo">ออกจากระบบ</button></div>`;
   document.getElementById('lo').onclick = () => sb.auth.signOut();
 }
 
@@ -861,6 +877,7 @@ window.addEventListener('hashchange', route);
 document.addEventListener('click', (e) => {
   if (e.target.closest('.scanBtn')) openScanner();
   if (e.target.closest('.langBtn')) setLang(getLang() === 'my' ? 'th' : 'my');
+  if (e.target.closest('.installBtn') && installPrompt) { installPrompt.prompt(); installPrompt.userChoice.finally(() => { installPrompt = null; route(); }); }
 });
 // เรียก Supabase ต่อจาก callback ด้วย setTimeout เพื่อไม่ให้ค้าง (ข้อแนะนำของ supabase-js)
 sb.auth.onAuthStateChange((_evt, session) => {
