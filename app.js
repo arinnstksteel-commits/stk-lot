@@ -593,12 +593,16 @@ async function viewLot(code) {
   try {
     const lot = await q(sb.from('lots').select('*, products(name, category, unit), receipts(supplier_doc_no, received_at, purchase_orders(po_no))').eq('lot_code', code).maybeSingle());
     if (!lot) { app.innerHTML = head(`Lot ${esc(code)}`, '', '#/', true) + '<div class="wrap"><p class="err">ไม่พบ Lot นี้</p></div>'; return; }
-    const [bal, files, meas, moves] = await Promise.all([
+    const [bal, files, meas, moves, people] = await Promise.all([
       q(sb.from('lot_balance').select('*').eq('lot_no', lot.lot_no).single()),
       q(sb.from('lot_files').select('*').eq('lot_no', lot.lot_no).order('id')),
       q(sb.from('lot_measurements').select('*').eq('lot_no', lot.lot_no).order('id')),
       q(sb.from('stock_moves').select('*').eq('lot_no', lot.lot_no).order('id', { ascending: false })),
+      q(sb.from('profiles').select('id, full_name')).catch(() => []),
     ]);
+    const nameOf = new Map(people.map((p) => [p.id, p.full_name]));
+    const byWho = (m) => [m.created_by ? `โดย ${nameOf.get(m.created_by) || '-'}` : '',
+      m.bill_by ? `เติมบิลโดย ${nameOf.get(m.bill_by) || '-'} ${fmtDate(m.bill_at)}` : ''].filter(Boolean).join(' · ');
     const sold = -moves.filter((m) => m.kind === 'sale').reduce((s, m) => s + Number(m.qty), 0);
     const cat = CATEGORIES[lot.products.category] || CATEGORIES.other;
     const certs = files.filter((f) => f.kind === 'cert');
@@ -642,7 +646,7 @@ async function viewLot(code) {
           <p class="muted" style="margin:0">ยังไม่รู้เลขบิลหรือลูกค้า ตัดไปก่อนได้ ระบบจะขึ้นใน "งานค้าง" ให้ออฟฟิศเติมทีหลัง</p>
           <button class="btn primary">ยืนยันตัดสต๊อค</button></form></div>
 
-      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div></div><span style="display:flex;gap:8px;align-items:center"><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b>${['sale', 'return', 'adjust'].includes(m.kind) ? delBtn('admin_delete_move', m.id, `ลบรายการ${KIND_TH[m.kind]} ${num(m.qty)} ${m.doc_no || ''} ?`, '', '×') : ''}</span></div>`).join('')}</div></div>
+      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div><div class="muted" style="font-size:12px">${esc(byWho(m))}</div></div><span style="display:flex;gap:8px;align-items:center"><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b>${['sale', 'return', 'adjust'].includes(m.kind) ? delBtn('admin_delete_move', m.id, `ลบรายการ${KIND_TH[m.kind]} ${num(m.qty)} ${m.doc_no || ''} ?`, '', '×') : ''}</span></div>`).join('')}</div></div>
 
       ${isOffice() ? `<div class="grid2"><a class="btn ghost" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a><a class="btn ghost" href="#/process/new?lot=${esc(lot.lot_code)}">ส่งตัด / ขัด</a></div>` : ''}
       ${delBtn('admin_delete_lot', lot.lot_no, `ลบ Lot ${lot.lot_code} ทั้งหมด?\n(ประวัติตัดสต๊อค ใบเซอร์ รูป ค่าวัด และงาน process ของ Lot นี้จะหายทั้งหมด กู้คืนไม่ได้)`, '#/', 'ลบ Lot นี้ทั้งหมด')}
