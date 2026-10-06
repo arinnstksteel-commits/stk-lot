@@ -957,8 +957,28 @@ function viewMe() {
     <div class="row"><span>บทบาท</span><b>${ROLE_TH[state.profile.role]}</b></div>
     <div class="row"><span>ภาษา</span>${langToggleHtml()}</div>
     <div class="row"><span>ชื่อผู้ใช้</span><span class="mono">${esc(state.session.user.email.replace('@' + EMAIL_DOMAIN, ''))}</span></div>
-  </div>${installCardHtml()}<button class="btn ghost block" id="lo">ออกจากระบบ</button></div>`;
+  </div>${installCardHtml()}<button class="btn ghost block" id="lo">ออกจากระบบ</button>
+  ${isAdmin() ? `<div class="card" style="outline:2px solid #FCA5A5"><h2>ล้างข้อมูลทดสอบ</h2>
+    <p class="muted" style="margin:0">ลบ PO, Lot, ประวัติตัดสต๊อค, ใบเซอร์, รูป, ค่าวัด และงาน On Process ทั้งหมด · เลข Lot จะเริ่มที่ 00001 ใหม่<br>เก็บไว้: รายการสินค้าจาก FlowAccount และบัญชีพนักงาน · <b>กู้คืนไม่ได้</b></p>
+    <label class="f">พิมพ์คำว่า <b>ล้างข้อมูล</b> เพื่อยืนยัน<input id="rsTxt" autocomplete="off"></label>
+    <button class="btn block del" id="rsBtn" disabled>ล้างข้อมูลทั้งหมด</button></div>` : ''}</div>`;
   document.getElementById('lo').onclick = () => sb.auth.signOut();
+  const rsTxt = document.getElementById('rsTxt');
+  if (rsTxt) {
+    const rsBtn = document.getElementById('rsBtn');
+    rsTxt.oninput = () => { rsBtn.disabled = rsTxt.value.trim() !== 'ล้างข้อมูล'; };
+    rsBtn.onclick = async () => {
+      if (!confirm('ยืนยันล้างข้อมูลทั้งหมด? กู้คืนไม่ได้')) return;
+      rsBtn.disabled = true; toast('กำลังล้างข้อมูล…', 20000);
+      try {
+        const paths = (await q(sb.rpc('admin_reset_test_data', { p_confirm: rsTxt.value.trim() }))) || [];
+        for (let i = 0; i < paths.length; i += 100) await sb.storage.from('lot-files').remove(paths.slice(i, i + 100)).catch(() => {});
+        productCache = null;
+        toast(`ล้างข้อมูลแล้ว · ลบไฟล์ ${paths.length} ไฟล์`, 4000);
+        location.hash = '#/';
+      } catch (err) { fail(err); rsBtn.disabled = false; }
+    };
+  }
 }
 
 /* ===================== ลบข้อมูล (แอดมินเท่านั้น) ===================== */

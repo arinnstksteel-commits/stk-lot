@@ -24,3 +24,4 @@
 6. `supabase/006_label_printed.sql`
 7. `supabase/007_lots_at_po.sql`
 8. `supabase/008_admin_delete.sql`
+9. `supabase/009_reset_test_data.sql`
