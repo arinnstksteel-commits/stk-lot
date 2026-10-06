@@ -1053,10 +1053,16 @@ async function viewDeliveryEdit(tripId, params) {
   try {
     let trip = { run_date: params.get('d') || isoDay(new Date()), seq: null, plate: '', vehicle_type: '', note: '', delivery_stops: [] };
     if (tripId) trip = await q(sb.from('delivery_trips').select('*, delivery_stops(*)').eq('id', tripId).single());
-    const [past, products] = await Promise.all([
+    const [past, products, bal] = await Promise.all([
       q(sb.from('delivery_trips').select('plate, vehicle_type').not('plate', 'is', null).order('id', { ascending: false }).limit(300)),
       loadProducts().catch(() => []),
+      q(sb.from('lot_balance').select('product_id, qty_on_hand').gt('qty_on_hand', 0)).catch(() => []),
     ]);
+    // ยอดคงเหลือในสต๊อค (นับจาก Lot ในระบบ) ต่อชื่อสินค้า
+    const prodByName = new Map(products.map((p) => [p.name, p]));
+    const onHand = new Map();
+    bal.forEach((b) => onHand.set(b.product_id, (onHand.get(b.product_id) || 0) + Number(b.qty_on_hand)));
+    const stockOf = (name) => { const p = prodByName.get(name); return p ? (onHand.get(p.id) || 0) : null; };
     const plates = new Map(); past.forEach((p) => { if (p.plate && !plates.has(p.plate)) plates.set(p.plate, p.vehicle_type); });
     if (!tripId) {
       const same = await q(sb.from('delivery_trips').select('seq').eq('run_date', trip.run_date));
@@ -1086,7 +1092,7 @@ async function viewDeliveryEdit(tripId, params) {
     });
     const stopsBox = document.getElementById('stops');
     const renumber = () => [...stopsBox.children].forEach((c, i) => { c.querySelector('.stopn').textContent = `เจ้าที่ ${i + 1}`; });
-    const addItem = (wrap, it = {}) => {
+    const addItem = (wrap, it = {}, after = null) => {
       const r = document.createElement('div');
       r.className = 'itemRow'; r.style.cssText = 'display:flex;flex-direction:column;gap:6px;border-top:1px solid var(--line);padding-top:8px';
       r.innerHTML = `<input name="iname" placeholder="สินค้า (พิมพ์ค้นหาได้)" autocomplete="off" value="${esc(it.name || '')}">
@@ -1094,6 +1100,7 @@ async function viewDeliveryEdit(tripId, params) {
         <div class="grid3"><input name="iqty" type="number" step="any" min="0" inputmode="decimal" placeholder="จำนวน" value="${it.qty ?? ''}">
         <input name="iunit" placeholder="หน่วย" value="${esc(it.unit || '')}">
         <button type="button" class="btn ghost sm rmItem">ลบ</button></div>
+        <div class="stockHint muted" style="font-size:13px" hidden></div>
         <div class="srcPick" role="radiogroup" aria-label="เอาของจากไหน" style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
           <button type="button" data-src="stock" class="btn sm">ในสต๊อค</button>
           <button type="button" data-src="hq" class="btn sm">รับที่สาขาใหญ่</button></div>`;
@@ -1103,8 +1110,29 @@ async function viewDeliveryEdit(tripId, params) {
         b.className = 'btn sm ' + (on ? (b.dataset.src === 'hq' ? 'primary' : 'dark') : 'ghost');
         b.setAttribute('aria-checked', on);
       });
-      r.querySelectorAll('[data-src]').forEach((b) => b.onclick = () => { r.dataset.src = b.dataset.src; paintSrc(); });
-      paintSrc();
+      const hint = r.querySelector('.stockHint');
+      const refreshHint = () => {
+        const name = r.querySelector('[name=iname]').value.trim();
+        const have = stockOf(name);
+        const want = Number(r.querySelector('[name=iqty]').value) || 0;
+        const unit = r.querySelector('[name=iunit]').value.trim();
+        if (have === null || r.dataset.src === 'hq') { hint.hidden = true; return; }
+        hint.hidden = false;
+        if (want > have) {
+          hint.innerHTML = `<span style="color:var(--bad)">ในสต๊อคมี ${num(have)} ${esc(unit)} · ขาด ${num(want - have)}</span> <button type="button" class="btn ghost sm splitBtn" style="margin-top:4px">แบ่ง ${num(want - have)} ไปรับที่สาขาใหญ่</button>`;
+          hint.querySelector('.splitBtn').onclick = () => {
+            const rest = want - have;
+            if (have > 0) { r.querySelector('[name=iqty]').value = have; }
+            else { r.dataset.src = 'hq'; paintSrc(); refreshHint(); return; }
+            addItem(wrap, { name, qty: rest, unit, source: 'hq' }, r);
+            refreshHint();
+          };
+        } else hint.textContent = `ในสต๊อคมี ${num(have)} ${unit}`;
+      };
+      r.querySelectorAll('[data-src]').forEach((b) => b.onclick = () => { r.dataset.src = b.dataset.src; paintSrc(); refreshHint(); });
+      r.querySelector('[name=iqty]').addEventListener('input', refreshHint);
+      r.querySelector('[name=iname]').addEventListener('change', refreshHint);
+      paintSrc(); refreshHint();
       const inp = r.querySelector('[name=iname]'); const box = r.querySelector('.suggest');
       inp.addEventListener('input', () => {
         const hits = searchProducts(products, inp.value, 8);
@@ -1115,11 +1143,12 @@ async function viewDeliveryEdit(tripId, params) {
         const b = e.target.closest('button[data-name]'); if (!b) return;
         inp.value = b.dataset.name; box.hidden = true;
         const u = r.querySelector('[name=iunit]'); if (!u.value) u.value = b.dataset.unit;
+        refreshHint();
         r.querySelector('[name=iqty]').focus();
       });
       inp.addEventListener('blur', () => setTimeout(() => { box.hidden = true; }, 200));
       r.querySelector('.rmItem').onclick = () => r.remove();
-      wrap.appendChild(r);
+      if (after) after.after(r); else wrap.appendChild(r);
     };
     const addStop = (s = {}) => {
       const c = document.createElement('div');
