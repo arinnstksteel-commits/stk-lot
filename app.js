@@ -169,7 +169,8 @@ async function viewHome() {
   document.getElementById('qs').onsubmit = (e) => { e.preventDefault(); const v = new FormData(e.target).get('q'); location.hash = '#/search?q=' + encodeURIComponent(v); };
 
   try {
-    const [noLabel, noBill, noCert, noPhoto, overdue, recent] = await Promise.all([
+    const [pos, noLabel, noBill, noCert, noPhoto, overdue, recent] = await Promise.all([
+      q(sb.from('purchase_orders').select(PO_SELECT).limit(500)),
       q(sb.from('lots').select('lot_no').is('label_printed_at', null)),
       q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
       q(sb.from('lot_balance').select('lot_no', { count: 'exact', head: false }).eq('has_cert', false).gt('qty_on_hand', 0)),
@@ -178,6 +179,8 @@ async function viewHome() {
       q(sb.from('lot_balance').select('*').order('lot_no', { ascending: false }).limit(8)),
     ]);
     const todo = [
+      ['PO รอของเข้า', 'คลังกดรับของวันที่ของมาส่ง', pos.filter((p) => poStatus(p).key === 'wait').length, 'info', '#/po?f=wait'],
+      ['รับของแล้ว รอแตก Lot', 'ออฟฟิศแตก Lot + อัปโหลดเซอร์', pos.filter((p) => poStatus(p).key === 'split').length, 'warn', '#/po?f=split'],
       ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
       ['Lot รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
       ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', ''],
@@ -203,21 +206,34 @@ function lotItem(l) {
 }
 
 /* ===================== PO ===================== */
-async function viewPOList() {
+// สถานะ PO: รอของเข้า (คลังกดรับ) → รอแตก Lot (ออฟฟิศ) → ครบ
+function poStatus(p) {
+  if (!p.receipts.length) return { key: 'wait', label: 'รอของเข้า', chip: 'info' };
+  if (p.po_lines.some((l) => !l.lots.length)) return { key: 'split', label: 'รอแตก Lot', chip: 'warn' };
+  return { key: 'done', label: 'ครบ', chip: 'ok' };
+}
+const PO_SELECT = 'id, po_no, supplier, ordered_at, receipts(id), po_lines(id, qty_ordered, lots(lot_no))';
+
+async function viewPOList(params = new URLSearchParams()) {
   setTabs('po');
-  app.innerHTML = head('รับของ / PO', 'รายการสั่งซื้อและการแตก Lot', '#/') + `
+  const f = params.get('f') || '';
+  const tabs = [['', 'ทั้งหมด'], ['wait', 'รอของเข้า'], ['split', 'รอแตก Lot'], ['done', 'ครบ']];
+  app.innerHTML = head('รับของ / PO', 'ออฟฟิศเปิด PO · คลังกดรับของวันที่ของมาส่ง', '#/') + `
   <div class="wrap">
     ${isOffice() ? '<a class="btn primary block" href="#/po/new">+ สร้างรายการรอเข้า (PO)</a>' : ''}
+    <div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-start">${tabs.map(([k, l]) =>
+      `<a class="btn sm ${k === f ? 'dark' : 'ghost'}" href="#/po${k ? '?f=' + k : ''}">${l}</a>`).join('')}</div>
     <div class="card"><div class="list" id="pos"><p class="empty">กำลังโหลด…</p></div></div>
   </div>`;
   try {
-    const pos = await q(sb.from('purchase_orders').select('id, po_no, supplier, ordered_at, po_lines(id, qty_ordered, lots(lot_no))').order('id', { ascending: false }).limit(100));
+    const pos = (await q(sb.from('purchase_orders').select(PO_SELECT).order('id', { ascending: false }).limit(200)))
+      .map((p) => ({ ...p, st: poStatus(p) })).filter((p) => !f || p.st.key === f);
     document.getElementById('pos').innerHTML = pos.length ? pos.map((p) => {
       const lots = p.po_lines.reduce((s, l) => s + l.lots.length, 0);
       return `<a class="item" href="#/po/${p.id}">
-        <div class="row"><span class="mono" style="font-weight:600">${esc(p.po_no)}</span><span class="muted">${fmtDate(p.ordered_at)}</span></div>
-        <div class="muted">${esc(p.supplier)} · ${p.po_lines.length} รายการ · ${lots} Lot</div></a>`;
-    }).join('') : '<p class="empty">ยังไม่มี PO</p>';
+        <div class="row"><span class="mono" style="font-weight:600">${esc(p.po_no)}</span><span class="chip ${p.st.chip}">${p.st.label}</span></div>
+        <div class="muted">${esc(p.supplier)} · สั่ง ${fmtDate(p.ordered_at)} · ${p.po_lines.length} รายการ · ${lots} Lot</div></a>`;
+    }).join('') : '<p class="empty">ไม่มีรายการ</p>';
   } catch (e) { fail(e); }
 }
 
@@ -323,10 +339,11 @@ async function viewPO(id) {
 
     app.innerHTML = head(`<span class="mono">${esc(po.po_no)}</span>`, `${esc(po.supplier)} · สั่ง ${fmtDate(po.ordered_at)}${receipt ? ` · บิล ${esc(receipt.supplier_doc_no)} รับ ${fmtDate(receipt.received_at)}` : ''}`, '#/po') + `
     <div class="wrap">
-      ${!receipt ? (isOffice() ? `<form class="card" id="rcForm"><h2>ของมาถึงแล้ว? บันทึกบิลรับของ</h2>
+      ${!receipt ? (['warehouse', 'admin'].includes(state.profile.role) ? `<form class="card" id="rcForm"><h2>ของมาถึงแล้ว? บันทึกบิลรับของ</h2>
+        <p class="muted" style="margin:0">คลังกดรับวันที่ของมาส่ง · ดูเลขบิลจากใบส่งของที่มากับสินค้า</p>
         <div class="grid2"><label class="f">เลขบิลผู้ขาย (IV / ST)<input name="doc" required class="mono" placeholder="IV6907623"></label>
         <label class="f">วันที่รับ<input name="d" type="date" value="${new Date().toISOString().slice(0, 10)}"></label></div>
-        <button class="btn dark">บันทึกการรับของ</button></form>` : '<div class="card"><span class="chip info">รอของเข้า</span></div>') : ''}
+        <button class="btn dark">บันทึกการรับของ</button></form>` : '<div class="card"><div class="row"><span>สถานะ</span><span class="chip info">รอของเข้า · รอคลังกดรับของ</span></div></div>') : ''}
       ${po.po_lines.map((l) => {
         const got = l.lots.reduce((s, x) => s + Number(x.qty_received), 0);
         return `<div class="card">
@@ -353,7 +370,7 @@ async function viewPO(id) {
     if (rc) rc.onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(rc);
-      try { await q(sb.from('receipts').insert({ po_id: po.id, supplier_doc_no: String(fd.get('doc')).trim(), received_at: fd.get('d') })); toast('บันทึกรับของแล้ว · แตก Lot ต่อได้เลย'); viewPO(id); } catch (err) { fail(err); }
+      try { await q(sb.from('receipts').insert({ po_id: po.id, supplier_doc_no: String(fd.get('doc')).trim(), received_at: fd.get('d') })); toast(isOffice() ? 'บันทึกรับของแล้ว · แตก Lot ต่อได้เลย' : 'บันทึกรับของแล้ว · ออฟฟิศจะแตก Lot ต่อ'); viewPO(id); } catch (err) { fail(err); }
     };
     app.querySelectorAll('.lotForm').forEach((f) => f.onsubmit = async (e) => {
       e.preventDefault();
@@ -635,7 +652,7 @@ async function route() {
   const params = new URLSearchParams(query || '');
   window.scrollTo(0, 0);
   if (!parts.length) return viewHome();
-  if (parts[0] === 'po' && !parts[1]) return viewPOList();
+  if (parts[0] === 'po' && !parts[1]) return viewPOList(params);
   if (parts[0] === 'po' && parts[1] === 'new') return viewPONew();
   if (parts[0] === 'po') return viewPO(Number(parts[1]));
   if (parts[0] === 'lot' && parts[1]) return viewLot(lotCode(parts[1]));
