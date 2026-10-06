@@ -20,7 +20,6 @@ const isAdmin = () => state.profile?.role === 'admin';
 // ปุ่มลบ (เห็นเฉพาะแอดมิน) — จัดการคลิกรวมที่ adminDelete()
 const delBtn = (fn, id, msg, go = '', label = 'ลบ') => isAdmin()
   ? `<button type="button" class="btn ghost sm del" data-adel="${fn}" data-id="${id}" data-msg="${esc(msg)}" data-go="${esc(go)}">${label}</button>` : '';
-const isAdmin = () => state.profile?.role === 'admin';
 const ROLE_TH = { admin: 'แอดมิน', office: 'ออฟฟิศ', warehouse: 'คลัง' };
 const baseUrl = () => location.href.split('#')[0];
 
