@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025101204';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025101204';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025101724';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025101724';
 
 initI18n();
 
@@ -358,7 +358,7 @@ async function viewPOList(params = new URLSearchParams()) {
   setTabs('po');
   const f = params.get('f') || '';
   const tabs = [['', 'ทั้งหมด'], ['wait', 'รอของเข้า'], ['split', 'ยังไม่แตก Lot'], ['done', 'รับครบ']];
-  app.innerHTML = head('รับของ / PO', 'ออฟฟิศเปิด PO · คลังกดรับของวันที่ของมาส่ง', '#/') + `
+  app.innerHTML = head('รับของ / PO', 'ออฟฟิศเปิด PO · กดรับของวันที่ของมาส่ง (คลังหรือออฟฟิศ)', '#/') + `
   <div class="wrap">
     ${isOffice() ? '<a class="btn primary block" href="#/po/new">+ สร้าง PO + แตก Lot</a>' : ''}
     <div class="row" style="gap:6px;flex-wrap:wrap;justify-content:flex-start">${tabs.map(([k, l]) =>
@@ -512,7 +512,7 @@ async function viewPO(id) {
     const costOf = new Map(costs.map((c) => [c.lot_no, Number(c.unit_cost)]));
     const rcById = new Map(po.receipts.map((r) => [r.id, r]));
     const waiting = po.po_lines.flatMap((l) => l.lots.filter((x) => !x.receipt_id).map((x) => ({ ...x, name: l.products.name, unit: l.products.unit }))).sort((a, b) => a.lot_no - b.lot_no);
-    const canReceive = ['warehouse', 'admin'].includes(state.profile.role);
+    const canReceive = ['warehouse', 'office', 'admin'].includes(state.profile.role);
 
     app.innerHTML = head(`<span class="mono">${esc(po.po_no)}</span>`, `${esc(po.supplier)} · สั่ง ${fmtDate(po.ordered_at)}${po.receipts.length ? ' · ' + po.receipts.map((r) => `บิล ${esc(r.supplier_doc_no)} รับ ${fmtDate(r.received_at)}`).join(', ') : ''}`, '#/po') + `
     <div class="wrap">
@@ -541,7 +541,7 @@ async function viewPO(id) {
             <div style="display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end">
               ${isOffice() && !hasCert.has(x.lot_no) ? `<label class="btn primary sm">อัปโหลดเซอร์<input type="file" accept="application/pdf,image/*" hidden data-cert="${x.lot_no}"></label>` : ''}
               ${isOffice() ? `<a class="btn ghost sm" href="#/label/${x.lot_code}">สติกเกอร์</a>` : ''}
-              ${isAdmin() ? delBtn('admin_delete_lot', x.lot_no, `ลบ Lot ${x.lot_code} ทั้งหมด? (กู้คืนไม่ได้)`) : isOffice() && !rc ? `<button type="button" class="btn ghost sm" data-del="${x.lot_no}" data-code="${x.lot_code}">ลบ</button>` : ''}
+              ${delBtn('admin_delete_lot', x.lot_no, `ลบ Lot ${x.lot_code} ทั้งหมด? (กู้คืนไม่ได้)`)}
             </div></div>`;
           }).join('')}
           ${isOffice() ? `<details><summary class="btn dash block" style="list-style:none">+ แตกเพิ่มอีก Lot (ใบเซอร์ / ลัง / มัด)</summary>
@@ -1175,7 +1175,7 @@ async function viewDeliveryEdit(tripId, params) {
       <div id="stops" style="display:flex;flex-direction:column;gap:14px"></div>
       <button type="button" class="btn dash block" id="addStop">+ เพิ่มเจ้าถัดไป</button>
       <button class="btn primary block" type="submit">บันทึก</button>
-      ${tripId ? '<button type="button" class="btn ghost block del" id="delTrip">ลบรถคันนี้</button>' : ''}
+      ${tripId && isAdmin() ? '<button type="button" class="btn ghost block del" id="delTrip">ลบรถคันนี้</button>' : ''}
     </form>`;
     const form = document.getElementById('tripForm');
     form.querySelector('[name=plate]').addEventListener('change', (e) => {
