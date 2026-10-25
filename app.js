@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025115500';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025115500';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025142002';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025142002';
 
 initI18n();
 
@@ -836,7 +836,7 @@ async function viewSearch(params) {
   const qv = params.get('q') || '';
   app.innerHTML = head('ค้นหา', 'เลข Lot · เลขบิล INV/NO · ชื่อสินค้า', '#/') + `
   <div class="wrap">
-    <form id="sf" class="row" style="gap:8px"><input name="q" value="${esc(qv)}" placeholder="เช่น 00003 หรือ INV2026080173" autofocus><button class="btn dark" aria-label="ค้นหา">${ICON.search}</button></form>
+    <form id="sf" class="row" style="gap:8px"><input name="q" value="${esc(qv)}" placeholder="เช่น 00003 · INV2026080173 · รางพับ 1x2 4.5" autofocus><button class="btn dark" aria-label="ค้นหา">${ICON.search}</button></form>
     <button type="button" class="btn primary block scanBtn">${ICON.scan} สแกน QR บนสติกเกอร์</button>
     <div id="res"></div>
   </div>`;
@@ -846,10 +846,18 @@ async function viewSearch(params) {
   const s = qv.trim();
   try {
     if (/^\d{1,5}$/.test(s)) { location.hash = '#/lot/' + lotCode(s); return; }
-    const [byDoc, byName] = await Promise.all([
+    // ชื่อสินค้า: พิมพ์หลายคำสลับลำดับได้ เช่น "รางพับ 1x2 4.5" หรือ "ba 1 1.2"
+    const prods = searchProducts(await loadProducts(), s, 40);
+    const [byDoc, lotsOf] = await Promise.all([
       q(sb.from('stock_moves').select('doc_no, customer, qty, created_at, lot_no, lots(lot_code, products(name))').ilike('doc_no', `%${s}%`).neq('kind', 'receive').order('id', { ascending: false }).limit(50)),
-      q(sb.from('lot_balance').select('*').ilike('product_name', `%${s}%`).gt('qty_on_hand', 0).order('lot_no').limit(50)),
+      prods.length ? q(sb.from('lot_balance').select('*').in('product_id', prods.map((p) => p.id)).order('lot_no')) : [],
     ]);
+    const live = lotsOf.filter((l) => l.received === false || l.qty_on_hand > 0);
+    const groups = prods.map((p) => {
+      const ls = live.filter((l) => l.product_id === p.id);
+      return { p, ls, onHand: ls.filter((l) => l.received !== false).reduce((a, l) => a + Number(l.qty_on_hand), 0), waiting: ls.filter((l) => l.received === false).reduce((a, l) => a + Number(l.qty_received), 0) };
+    }).sort((a, b) => (b.onHand > 0) - (a.onHand > 0) || (b.waiting > 0) - (a.waiting > 0));
+    const byName = groups;
     const lotNos = [...new Set(byDoc.map((m) => m.lot_no))];
     const certs = lotNos.length ? await q(sb.from('lot_files').select('lot_no, storage_path, file_name').eq('kind', 'cert').in('lot_no', lotNos)) : [];
     res.innerHTML = `
@@ -861,7 +869,13 @@ async function viewSearch(params) {
           <div class="row"><a class="lotcode" href="#/lot/${m.lots.lot_code}">Lot ${m.lots.lot_code}</a>
           ${c.length ? c.map((x) => `<button class="btn primary sm" data-open="${esc(x.storage_path)}">ใบเซอร์</button>`).join('') : '<span class="chip warn">ยังไม่มีเซอร์</span>'}</div></div>`;
       }).join('')}</div></div>` : ''}
-      ${byName.length ? `<div class="card"><h2>Lot ที่มีของ</h2><div class="list">${byName.map(lotItem).join('')}</div></div>` : ''}
+      ${byName.length ? `<h2 style="margin:6px 0 0;font-size:16px">สินค้าที่ตรงกัน · ${byName.length}${byName.length >= 40 ? '+ (พิมพ์เพิ่มให้แคบลง)' : ''}</h2>
+        ${byName.map((g) => `<div class="card">
+          <div class="row" style="align-items:flex-start;gap:8px"><b>${esc(g.p.name)}</b>
+            <span class="chip ${g.onHand > 0 ? 'ok' : 'warn'}" style="white-space:nowrap">${g.onHand > 0 ? `มี ${num(g.onHand)} ${esc(g.p.unit || '')}` : 'ไม่มีของ'}</span></div>
+          ${g.waiting ? `<div class="muted">รอของเข้า ${num(g.waiting)} ${esc(g.p.unit || '')}</div>` : ''}
+          ${g.ls.length ? `<div class="list">${g.ls.map(lotItem).join('')}</div>` : ''}
+        </div>`).join('')}` : ''}
       ${!byDoc.length && !byName.length ? '<p class="empty">ไม่พบผลลัพธ์</p>' : ''}`;
     res.querySelectorAll('[data-open]').forEach((b) => b.onclick = async () => { const u = await signedUrl(b.dataset.open, 600); if (u) window.open(u, '_blank', 'noopener'); });
   } catch (e) { fail(e); }
