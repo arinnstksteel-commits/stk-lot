@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025160952';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025160952';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025161601';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025161601';
 
 initI18n();
 
@@ -211,7 +211,7 @@ async function loadProducts() {
     all.push(...page);
     if (page.length < 1000) break;
   }
-  all.forEach((p) => { p._s = normText(`${p.name} ${p.code || ''}`); });
+  all.forEach((p) => { p._s = normText(`${p.name} ${p.code || ''}`); p._c = p._s.replace(/ /g, ''); });
   return (productCache = all);
 }
 // ทำให้ค้นง่าย: ตัวเล็ก ตัด ' " และช่องว่างซ้ำ ("4'x8'" -> "4x8")
@@ -220,11 +220,15 @@ const normText = (s) => String(s).toLowerCase().replace(/['"`]/g, '').replace(/\
 function searchProducts(list, text, limit = 15) {
   const tokens = normText(text).split(' ').filter(Boolean);
   if (!tokens.length) return [];
+  // ไม่สนช่องว่าง: "sch40" เจอ "SCH 40", "4x8" เจอ "4 x 8"
   const hits = [];
   for (const p of list) {
-    if (tokens.every((t) => p._s.includes(t))) { hits.push(p); if (hits.length >= limit) break; }
+    if (tokens.every((t) => p._s.includes(t) || p._c.includes(t))) hits.push(p);
   }
-  return hits;
+  // คำที่ตรงเป๊ะเป็นคำ (ไม่ใช่ส่วนหนึ่งของคำอื่น เช่น 1/2 ใน 1-1/2) ขึ้นก่อน
+  const whole = (p, t) => (' ' + p._s + ' ').includes(' ' + t + ' ');
+  const score = (p) => tokens.reduce((a, t) => a + (whole(p, t) ? 2 : 0) + (p._s.includes(t) ? 1 : 0), 0);
+  return hits.map((p) => [score(p), p]).sort((a, b) => b[0] - a[0]).slice(0, limit).map((x) => x[1]);
 }
 
 /* ===================== auth ===================== */
