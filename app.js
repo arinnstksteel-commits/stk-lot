@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025100712';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025100712';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025101204';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025101204';
 
 initI18n();
 
@@ -477,6 +477,9 @@ async function viewPONew() {
         })).filter((x) => x.qty > 0),
       })).filter((r) => r.name && r.lots.length);
       if (!rows.length) throw new Error('ใส่สินค้าอย่างน้อย 1 รายการ');
+      const poNo = String(fd.get('po_no')).trim();
+      const same = await q(sb.from('purchase_orders').select('id').eq('po_no', poNo));
+      if (same.length && !confirm(`มี PO ${poNo} อยู่แล้ว ${same.length} ใบ\nต้องการบันทึกเพิ่มอีกใบใช่ไหม?`)) { btn.disabled = false; return; }
       const po = await q(sb.from('purchase_orders').insert({
         po_no: String(fd.get('po_no')).trim(), supplier: fd.get('supplier'), ordered_at: fd.get('ordered_at'), note: fd.get('note') || null,
       }).select('id').single());
