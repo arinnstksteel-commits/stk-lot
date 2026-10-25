@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025142002';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025142002';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025160952';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025160952';
 
 initI18n();
 
@@ -303,7 +303,7 @@ async function viewHome() {
   document.getElementById('qs').onsubmit = (e) => { e.preventDefault(); const v = new FormData(e.target).get('q'); location.hash = '#/search?q=' + encodeURIComponent(v); };
 
   try {
-    const [pos, noLabel, noBill, noPrice, noCert, noPhoto, overdue, recent] = await Promise.all([
+    const [pos, noLabel, noBill, noPrice, noCert, noPhoto, overdue, recent, toCheck] = await Promise.all([
       q(sb.from('purchase_orders').select(PO_SELECT).limit(500)),
       q(sb.from('lots').select('lot_no').is('label_printed_at', null).not('receipt_id', 'is', null)),
       q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
@@ -312,6 +312,7 @@ async function viewHome() {
       q(sb.from('lot_balance').select('lot_no').eq('has_photo', false).gt('qty_on_hand', 0)),
       q(sb.from('process_jobs').select('id, due_date').eq('status', 'sent')),
       q(sb.from('lot_balance').select('*').order('lot_no', { ascending: false }).limit(8)),
+      q(sb.from('lots').select('lot_no').ilike('note', 'รอเช็ค%')),
     ]);
     const today = new Date().toISOString().slice(0, 10);
     const late = overdue.filter((j) => j.due_date && j.due_date < today).length;
@@ -323,6 +324,7 @@ async function viewHome() {
       ['Lot รอพิมพ์สติกเกอร์', 'รับของแล้ว · ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
       ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', '#/lots?f=nocert'],
       ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', '#/lots?f=nophoto'],
+      ['Lot รอเช็คยอด', 'รับตามใบนับไปก่อน · นับซ้ำแล้วกด "เช็คแล้ว"', toCheck.length, 'warn', '#/lots?f=check'],
       ['ส่งตัด/ขัด ยังไม่รับคืน', late ? `เลยกำหนด ${late} งาน` : 'ติดตามจนกว่าจะรับคืน', overdue.length, late ? 'bad' : 'warn', '#/process'],
     ];
     document.getElementById('todo').innerHTML = todo.map(([t, s, n, c, href]) => {
@@ -652,6 +654,8 @@ async function viewLot(code) {
     </header>
     <div class="wrap">
       <div class="muted">${rc?.purchase_orders?.po_no ? esc(rc.purchase_orders.po_no) + ' · ' : ''}${rc ? 'บิล ' + esc(rc.supplier_doc_no) + ' · รับ ' + fmtDate(rc.received_at) : ''}${lot.heat_no ? ' · Heat ' + esc(lot.heat_no) : ''}${Number(bal.qty_on_process) ? ` · <b>On Process ${num(bal.qty_on_process)}</b>` : ''}</div>
+      ${lot.note ? `<div class="card" style="${/^รอเช็ค/.test(lot.note) ? 'border-color:#F59E0B;background:#FFFBEB' : ''}"><div class="row" style="align-items:flex-start;gap:8px"><span><b>หมายเหตุ</b><br>${esc(lot.note)}</span>
+        ${isOffice() ? '<button class="btn ghost sm" id="noteDone" style="white-space:nowrap">เช็คแล้ว</button>' : ''}</div></div>` : ''}
 
       <div class="card"><div class="row"><h2>ใบเซอร์</h2>${isOffice() ? `<label class="btn ghost sm">+ อัปโหลด<input type="file" accept="application/pdf,image/*" hidden id="certIn"></label>` : ''}</div>
         ${certs.length ? certs.map((c) => `<div class="row"><span>${esc(c.file_name || 'ใบเซอร์')}</span><span style="display:flex;gap:6px"><button class="btn ghost sm" data-open="${esc(c.storage_path)}">เปิด / ดาวน์โหลด</button>${delBtn('admin_delete_file', c.id, 'ลบไฟล์ใบเซอร์ ' + (c.file_name || '') + ' ?')}</span></div>`).join('') : '<p class="empty" style="padding:4px 0">ยังไม่มีใบเซอร์</p>'}
@@ -690,6 +694,13 @@ async function viewLot(code) {
     </div>`;
 
     app.querySelectorAll('[data-open]').forEach((b) => b.onclick = async () => { const u = await signedUrl(b.dataset.open, 600); if (u) window.open(u, '_blank', 'noopener'); });
+    const noteDone = document.getElementById('noteDone');
+    if (noteDone) noteDone.onclick = async () => {
+      if (!confirm('เช็คแล้ว ลบหมายเหตุนี้?')) return;
+      noteDone.disabled = true;
+      try { await q(sb.from('lots').update({ note: null }).eq('lot_no', lot.lot_no)); toast('ลบหมายเหตุแล้ว'); viewLot(code); }
+      catch (e) { fail(e); noteDone.disabled = false; }
+    };
     const certIn = document.getElementById('certIn');
     if (certIn) certIn.onchange = async () => { if (!certIn.files[0]) return; toast('กำลังอัปโหลด…', 10000); try { await uploadLotFile(lot.lot_no, 'cert', certIn.files[0]); toast('อัปโหลดแล้ว'); viewLot(code); } catch (e) { fail(e); } };
     const photoIn = document.getElementById('photoIn');
@@ -939,13 +950,17 @@ async function viewPending() {
 async function viewLots(params) {
   setTabs('home');
   const f = params.get('f');
-  const title = f === 'nocert' ? 'Lot รอใบเซอร์' : f === 'nophoto' ? 'Lot รอรูปวัดขนาด' : 'Lot ทั้งหมด';
-  const sub = f === 'nocert' ? 'ออฟฟิศอัปโหลดใบเซอร์' : f === 'nophoto' ? 'คลังถ่ายรูปวัด + กรอกค่าวัด' : 'Lot ที่ยังมีของ';
+  const title = f === 'nocert' ? 'Lot รอใบเซอร์' : f === 'nophoto' ? 'Lot รอรูปวัดขนาด' : f === 'check' ? 'Lot รอเช็คยอด' : 'Lot ทั้งหมด';
+  const sub = f === 'nocert' ? 'ออฟฟิศอัปโหลดใบเซอร์' : f === 'nophoto' ? 'คลังถ่ายรูปวัด + กรอกค่าวัด' : f === 'check' ? 'รับตามใบนับไปก่อน ต้องเช็คอีกรอบ' : 'Lot ที่ยังมีของ';
   app.innerHTML = head(title, sub, '#/') + '<p class="loading">กำลังโหลด…</p>';
   try {
     let qb = sb.from('lot_balance').select('*').gt('qty_on_hand', 0).order('lot_no');
     if (f === 'nocert') qb = qb.eq('has_cert', false);
     if (f === 'nophoto') qb = qb.eq('has_photo', false);
+    if (f === 'check') {
+      const ids = (await q(sb.from('lots').select('lot_no').ilike('note', 'รอเช็ค%'))).map((x) => x.lot_no);
+      qb = sb.from('lot_balance').select('*').in('lot_no', ids.length ? ids : [-1]).order('lot_no');
+    }
     const lots = await q(qb.limit(500));
     app.innerHTML = head(title, `${lots.length} Lot · ${sub}`, '#/') + `<div class="wrap"><div class="card"><div class="list">
       ${lots.length ? lots.map(lotItem).join('') : '<p class="empty">ไม่มีรายการค้าง 🎉</p>'}</div></div></div>`;
