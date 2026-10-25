@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES } from './config.js?v=20261006173208';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261006173208';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025091402';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025091402';
 
 initI18n();
 
@@ -628,10 +628,12 @@ async function viewLot(code) {
       </div>
 
       <div class="card"><div class="row"><h2>รูปวัดขนาด</h2><span class="muted">${photos.length} รูป</span></div>
+        <p class="muted" style="margin:0;background:#F7F8F7;border-radius:8px;padding:8px 10px">📷 <b>${esc(cat.label)}:</b> ${esc(cat.photo || '')}</p>
         <div class="photos">${photoUrls.map((u, i) => `<div class="ph"><a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="รูปวัด Lot ${esc(lot.lot_code)}" loading="lazy"></a>${delBtn('admin_delete_file', photos[i].id, 'ลบรูปนี้?', '', '×')}</div>`).join('')}
           <label class="add" aria-label="ถ่ายรูปเพิ่ม">+<input type="file" accept="image/*" capture="environment" hidden id="photoIn" multiple></label></div>
         <form id="measForm" style="display:flex;flex-direction:column;gap:8px">
-          <div class="grid3">${cat.measures.map((m) => `<label class="f">${m} (มม.)<input name="${esc(m)}" inputmode="decimal" type="number" step="any" class="mono"></label>`).join('')}</div>
+          <div class="grid3">${cat.measures.map((x) => `<label class="f"><span>${esc(x.m)} (มม.)${x.opt ? '' : ' <b style="color:var(--bad)">*</b>'}<br><small>${TOOL_TH[x.t]}</small></span><input name="${esc(x.m)}" inputmode="decimal" type="number" step="any" min="0.001" class="mono" ${x.opt ? '' : 'required'}></label>`).join('')}</div>
+          <p class="muted" style="margin:0;font-size:12px"><b style="color:var(--bad)">*</b> ต้องกรอกให้ครบก่อนบันทึก</p>
           <button class="btn dark sm">บันทึกค่าวัด</button></form>
         ${meas.length ? `<div class="list">${meas.map((m) => `<div class="row"><span>${esc(m.measure)}</span><span class="mono">${num(m.value)} ${esc(m.unit)} <span class="muted">${fmtDate(m.created_at)}</span> ${delBtn('admin_delete_measurement', m.id, 'ลบค่าวัด ' + m.measure + ' ?', '', '×')}</span></div>`).join('')}</div>` : ''}
       </div>
@@ -663,8 +665,10 @@ async function viewLot(code) {
     };
     document.getElementById('measForm').onsubmit = async (e) => {
       e.preventDefault();
-      const rows = [...new FormData(e.target).entries()].filter(([, v]) => v !== '').map(([measure, value]) => ({ lot_no: lot.lot_no, measure, value: Number(value) }));
-      if (!rows.length) return toast('ยังไม่ได้กรอกค่าวัด');
+      const fd = new FormData(e.target);
+      const missing = cat.measures.filter((x) => !x.opt && !(Number(fd.get(x.m)) > 0)).map((x) => x.m);
+      if (missing.length) return toast('กรอกให้ครบก่อน: ' + missing.join(', '), 4000);
+      const rows = [...fd.entries()].filter(([, v]) => v !== '').map(([measure, value]) => ({ lot_no: lot.lot_no, measure, value: Number(value) }));
       try { await q(sb.from('lot_measurements').insert(rows)); toast('บันทึกค่าวัดแล้ว'); viewLot(code); } catch (err) { fail(err); }
     };
     document.getElementById('cutForm').onsubmit = async (e) => {
