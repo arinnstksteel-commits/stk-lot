@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025091402';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025091402';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025092022';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025092022';
 
 initI18n();
 
@@ -696,7 +696,23 @@ async function viewLabel(codeParam) {
     if (!lots.length) { app.innerHTML = head('สติกเกอร์', '', '#/') + '<div class="wrap"><p class="err">ไม่พบ Lot</p></div>'; return; }
     const qrs = await Promise.all(lots.map((l) => QRCode.toDataURL(`${baseUrl()}#/lot/${l.lot_code}`, { margin: 0, width: 300, errorCorrectionLevel: 'M' })));
     const back = lots.length === 1 ? '#/lot/' + lots[0].lot_code : '#/labels';
-    app.innerHTML = `<div class="noprint">${head(lots.length === 1 ? 'สติกเกอร์ Lot ' + esc(lots[0].lot_code) : `สติกเกอร์ ${lots.length} Lot`, 'ขนาด 75×50 มม.', back)}</div>
+    // โหมดพิมพ์: a4 = กระดาษ A4 หน้าละ 8 ป้าย (ตัดแปะฟิวเจอร์บอร์ด) · roll = เครื่องพิมพ์สติกเกอร์ 75×50
+    let mode = 'a4'; try { mode = localStorage.getItem('stk-label-mode') || 'a4'; } catch { /* ใช้ค่าเริ่มต้น */ }
+    const MODES = {
+      a4: { page: '@page { size: A4 portrait; margin: 8mm; }', hint: 'กระดาษ A4 หน้าละ 8 ป้าย (95×68 มม.) · ตั้งค่าพิมพ์: A4, ขนาดจริง 100% (ไม่ย่อให้พอดีหน้า) · ตัดตามเส้นประ แปะฟิวเจอร์บอร์ด แล้วปิดเทปใสทับกันน้ำ' },
+      roll: { page: '@page { size: 75mm 50mm; margin: 0; }', hint: 'เครื่องพิมพ์สติกเกอร์ · ตั้งค่ากระดาษ 75×50 มม. ขอบ 0' },
+    };
+    const applyMode = () => {
+      document.body.classList.toggle('a4', mode === 'a4');
+      let st = document.getElementById('pageRule');
+      if (!st) { st = document.createElement('style'); st.id = 'pageRule'; document.head.appendChild(st); }
+      st.textContent = '@media print { ' + MODES[mode].page + ' }';
+      app.querySelectorAll('[data-mode]').forEach((b) => { b.className = 'btn sm ' + (b.dataset.mode === mode ? 'dark' : 'ghost'); });
+      const h = document.getElementById('modeHint'); if (h) h.textContent = MODES[mode].hint;
+    };
+    app.innerHTML = `<div class="noprint">${head(lots.length === 1 ? 'ป้าย Lot ' + esc(lots[0].lot_code) : `ป้าย ${lots.length} Lot`, '', back)}</div>
+    <div class="noprint" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;max-width:420px;margin:12px auto 0;padding:0 16px">
+      <button type="button" data-mode="a4">กระดาษ A4</button><button type="button" data-mode="roll">เครื่องพิมพ์สติกเกอร์</button></div>
     <div class="label-sheet">
       ${lots.map((lot, i) => `<div class="noprint row" style="width:100%;max-width:420px">
           <span class="lotcode">Lot ${esc(lot.lot_code)}</span>
@@ -709,8 +725,12 @@ async function viewLabel(codeParam) {
           <div class="bot"><span>${lot.receipts ? 'รับ ' + fmtDate(lot.receipts.received_at) : ''}</span><span>${esc(lot.bundle_label || '')}</span><span>${num(lot.qty_received)} ${esc(lot.products.unit)}</span></div>
         </div>`).join('')}
       <button class="btn primary block noprint" style="max-width:420px" id="printBtn">พิมพ์${lots.length > 1 ? 'ทั้งหมด' : ''}</button>
-      <p class="muted noprint" style="max-width:420px">ตั้งค่าเครื่องพิมพ์เป็นกระดาษ 75×50 มม. ขอบ 0 · พิมพ์เสร็จแล้วระบบจะถามเพื่อเอาออกจากงานค้าง</p>
+      <p class="muted noprint" style="max-width:420px"><span id="modeHint"></span> · พิมพ์เสร็จแล้วระบบจะถามเพื่อเอาออกจากงานค้าง</p>
     </div>`;
+    app.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => { mode = b.dataset.mode; try { localStorage.setItem('stk-label-mode', mode); } catch { /* ไม่เป็นไร */ } applyMode(); });
+    applyMode();
+    // ออกจากหน้านี้แล้วเอาโหมด A4 ออก
+    window.addEventListener('hashchange', () => document.body.classList.remove('a4'), { once: true });
     document.getElementById('printBtn').onclick = async () => {
       const sheet = app.querySelector('.label-sheet');
       sheet.querySelectorAll('.label.copy').forEach((c) => c.remove());

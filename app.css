@@ -127,12 +127,21 @@ input.big { font-family: var(--mono); font-size: 22px; letter-spacing: 2px; min-
 .label img.qr { width: 24mm; height: 24mm; flex: none; }
 .label .bot { display: flex; justify-content: space-between; font-size: 7.5pt; border-top: .4mm solid #000; padding-top: 1mm; }
 
+/* ป้ายแบบกระดาษ A4: 95×68 มม. หน้าละ 2×4 ป้าย มีเส้นประให้ตัด */
+body.a4 .label { width: 95mm; height: 68mm; padding: 4mm; gap: 2mm; border: 1px dashed #777; }
+body.a4 .label .top { font-size: 11pt; }
+body.a4 .label .code { font-size: 40pt; }
+body.a4 .label .name { font-size: 11pt; }
+body.a4 .label img.qr { width: 34mm; height: 34mm; }
+body.a4 .label .bot { font-size: 10pt; padding-top: 1.5mm; }
+
 @media print {
-  @page { size: 75mm 50mm; margin: 0; }
   body { background: #fff; padding: 0; }
   #tabbar, #toast, .noprint { display: none !important; }
   .label-sheet { padding: 0; gap: 0; }
   .label { border: 0; page-break-after: always; }
+  body.a4 .label-sheet { display: grid; grid-template-columns: 95mm 95mm; grid-auto-rows: 68mm; gap: 0; justify-content: center; align-items: start; }
+  body.a4 .label { border: 1px dashed #777; page-break-after: auto; break-inside: avoid; }
 }
 
 /* ---------- สแกน QR ---------- */
