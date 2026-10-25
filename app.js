@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025092022';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025092022';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025100712';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025100712';
 
 initI18n();
 
@@ -14,6 +14,7 @@ const state = { session: null, profile: null };
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const lotCode = (n) => String(n).padStart(5, '0');
 const fmtDate = (d) => (d ? new Date(d).toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '');
+const baht = (v) => '฿' + Number(v ?? 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const num = (v) => Number(v ?? 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
 const isOffice = () => ['admin', 'office'].includes(state.profile?.role);
 const isAdmin = () => state.profile?.role === 'admin';
@@ -302,10 +303,11 @@ async function viewHome() {
   document.getElementById('qs').onsubmit = (e) => { e.preventDefault(); const v = new FormData(e.target).get('q'); location.hash = '#/search?q=' + encodeURIComponent(v); };
 
   try {
-    const [pos, noLabel, noBill, noCert, noPhoto, overdue, recent] = await Promise.all([
+    const [pos, noLabel, noBill, noPrice, noCert, noPhoto, overdue, recent] = await Promise.all([
       q(sb.from('purchase_orders').select(PO_SELECT).limit(500)),
       q(sb.from('lots').select('lot_no').is('label_printed_at', null)),
       q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
+      isOffice() ? q(sb.from('sales_without_price').select('id').not('doc_no', 'is', null)) : Promise.resolve([]),
       q(sb.from('lot_balance').select('lot_no', { count: 'exact', head: false }).eq('has_cert', false).gt('qty_on_hand', 0)),
       q(sb.from('lot_balance').select('lot_no').eq('has_photo', false).gt('qty_on_hand', 0)),
       q(sb.from('process_jobs').select('id, due_date').eq('status', 'sent')),
@@ -317,6 +319,7 @@ async function viewHome() {
       ['PO รอของเข้า', 'คลังกดรับของวันที่ของมาส่ง', pos.filter((p) => poStatus(p).key === 'wait').length, 'info', '#/po?f=wait'],
       ['PO ยังไม่แตก Lot', 'ออฟฟิศแตก Lot ให้ครบทุกรายการ', pos.filter((p) => poStatus(p).key === 'split').length, 'warn', '#/po?f=split'],
       ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
+      ...(isOffice() ? [['ขายแล้ว รอใส่ราคาขาย', 'ออฟฟิศใส่ราคาขายต่อหน่วย', noPrice.length, 'warn', '#/pending']] : []),
       ['Lot รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
       ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', '#/lots?f=nocert'],
       ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', '#/lots?f=nophoto'],
@@ -407,6 +410,7 @@ async function viewPONew() {
         <div class="grid2"><label class="f">ประเภท<select name="category">${Object.entries(CATEGORIES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('')}</select></label>
         <label class="f">รหัส FlowAccount<input name="code" placeholder="ถ้ามี"></label></div>
       </div>
+      <label class="f">ราคาทุน / หน่วย (บาท ก่อน VAT)<input name="cost" type="number" min="0" step="any" inputmode="decimal" placeholder="ไม่บังคับ ใส่ทีหลังได้"></label>
       <div class="lotrows" style="display:flex;flex-direction:column;gap:8px"></div>
       <div class="row"><span class="muted total"></span><button type="button" class="btn ghost sm rm">ลบรายการ</button></div>
       <button type="button" class="btn dash sm addLot">+ แบ่งเพิ่มอีก Lot (คนละใบเซอร์ / ลัง / มัด)</button></div>`;
@@ -465,6 +469,7 @@ async function viewPONew() {
         name: d.querySelector('[name=product]').value.trim(),
         category: d.querySelector('[name=category]').value,
         code: d.querySelector('[name=code]').value.trim() || null,
+        cost: d.querySelector('[name=cost]').value === '' ? null : Number(d.querySelector('[name=cost]').value),
         lots: [...d.querySelectorAll('.lotrows > div')].map((r) => ({
           qty: Number(r.querySelector('[name=qty]').value),
           bundle: r.querySelector('[name=bundle]').value.trim() || null,
@@ -482,7 +487,8 @@ async function viewPONew() {
           byName.set(r.name, p);
         }
         const line = await q(sb.from('po_lines').insert({ po_id: po.id, product_id: p.id, qty_ordered: r.lots.reduce((a, x) => a + x.qty, 0) }).select('id').single());
-        await q(sb.from('lots').insert(r.lots.map((x) => ({ product_id: p.id, po_line_id: line.id, qty_received: x.qty, bundle_label: x.bundle, heat_no: x.heat }))));
+        const made = await q(sb.from('lots').insert(r.lots.map((x) => ({ product_id: p.id, po_line_id: line.id, qty_received: x.qty, bundle_label: x.bundle, heat_no: x.heat }))).select('lot_no'));
+        if (r.cost !== null) await q(sb.from('lot_costs').insert(made.map((m) => ({ lot_no: m.lot_no, unit_cost: r.cost }))));
       }
       productCache = null;
       toast('บันทึก PO และแตก Lot แล้ว');
@@ -499,6 +505,8 @@ async function viewPO(id) {
     const lotNos = po.po_lines.flatMap((l) => l.lots.map((x) => x.lot_no));
     const certs = lotNos.length ? await q(sb.from('lot_files').select('lot_no').eq('kind', 'cert').in('lot_no', lotNos)) : [];
     const hasCert = new Set(certs.map((c) => c.lot_no));
+    const costs = isOffice() && lotNos.length ? await q(sb.from('lot_costs').select('lot_no, unit_cost').in('lot_no', lotNos)) : [];
+    const costOf = new Map(costs.map((c) => [c.lot_no, Number(c.unit_cost)]));
     const rcById = new Map(po.receipts.map((r) => [r.id, r]));
     const waiting = po.po_lines.flatMap((l) => l.lots.filter((x) => !x.receipt_id).map((x) => ({ ...x, name: l.products.name, unit: l.products.unit }))).sort((a, b) => a.lot_no - b.lot_no);
     const canReceive = ['warehouse', 'admin'].includes(state.profile.role);
@@ -525,7 +533,7 @@ async function viewPO(id) {
             return `<div class="sub-lot">
             <a href="#/lot/${x.lot_code}" style="text-decoration:none;color:inherit;display:flex;flex-direction:column;gap:2px;min-width:0">
               <span class="lotcode">Lot ${x.lot_code}${x.bundle_label ? ' · ' + esc(x.bundle_label) : ''} · ${num(x.qty_received)}</span>
-              <span>${rc ? `<span class="chip ok">รับแล้ว ${fmtDate(rc.received_at)}</span>` : '<span class="chip info">รอของเข้า</span>'}</span>
+              <span>${rc ? `<span class="chip ok">รับแล้ว ${fmtDate(rc.received_at)}</span>` : '<span class="chip info">รอของเข้า</span>'}${isOffice() ? (costOf.has(x.lot_no) ? ` <span class="muted mono">ทุน ${baht(costOf.get(x.lot_no))}</span>` : ' <span class="chip warn">ยังไม่ใส่ราคาทุน</span>') : ''}</span>
               <span class="muted" style="color:${hasCert.has(x.lot_no) ? 'var(--ok)' : 'var(--warn)'}">${hasCert.has(x.lot_no) ? `ใบเซอร์ ✓${x.heat_no ? ' · Heat ' + esc(x.heat_no) : ''}` : 'ยังไม่มีใบเซอร์'}</span></a>
             <div style="display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end">
               ${isOffice() && !hasCert.has(x.lot_no) ? `<label class="btn primary sm">อัปโหลดเซอร์<input type="file" accept="application/pdf,image/*" hidden data-cert="${x.lot_no}"></label>` : ''}
@@ -538,6 +546,7 @@ async function viewPO(id) {
               <div class="grid3"><label class="f">จำนวน<input name="qty" type="number" step="any" min="0.01" required inputmode="decimal" value="${Math.max(0, Number(l.qty_ordered) - planned) || ''}"></label>
               <label class="f">ลัง/มัด<input name="bundle" placeholder="ลัง 1"></label>
               <label class="f">Heat No.<input name="heat" placeholder="จากเซอร์"></label></div>
+              <label class="f">ราคาทุน / หน่วย (บาท ก่อน VAT)<input name="cost" type="number" min="0" step="any" inputmode="decimal" value="${l.lots.map((x) => costOf.get(x.lot_no)).find((v) => v !== undefined) ?? ''}"></label>
               <button class="btn dark">สร้าง Lot</button></form></details>` : ''}
         </div>`;
       }).join('')}
@@ -565,7 +574,8 @@ async function viewPO(id) {
         const lot = await q(sb.from('lots').insert({
           product_id: Number(f.dataset.product), po_line_id: Number(f.dataset.line),
           qty_received: Number(fd.get('qty')), bundle_label: fd.get('bundle') || null, heat_no: fd.get('heat') || null,
-        }).select('lot_code').single());
+        }).select('lot_no, lot_code').single());
+        if (fd.get('cost') !== '' && fd.get('cost') !== null) await q(sb.from('lot_costs').insert({ lot_no: lot.lot_no, unit_cost: Number(fd.get('cost')) }));
         toast(`สร้าง Lot ${lot.lot_code} แล้ว`);
         viewPO(id);
       } catch (err) { fail(err); f.querySelector('button').disabled = false; }
@@ -600,6 +610,23 @@ async function viewLot(code) {
       q(sb.from('stock_moves').select('*').eq('lot_no', lot.lot_no).order('id', { ascending: false })),
       q(sb.from('profiles').select('id, full_name')).catch(() => []),
     ]);
+    // ราคา: เฉพาะออฟฟิศ/แอดมิน (บัญชีคลังอ่านตารางราคาไม่ได้อยู่แล้ว)
+    let cost = null; const priceOf = new Map();
+    if (isOffice()) {
+      const [c, pr] = await Promise.all([
+        q(sb.from('lot_costs').select('unit_cost').eq('lot_no', lot.lot_no).maybeSingle()),
+        moves.length ? q(sb.from('move_prices').select('move_id, unit_price').in('move_id', moves.map((m) => m.id))) : [],
+      ]);
+      cost = c ? Number(c.unit_cost) : null;
+      pr.forEach((x) => priceOf.set(x.move_id, Number(x.unit_price)));
+    }
+    const priceTag = (m) => {
+      if (!isOffice() || m.kind !== 'sale') return '';
+      if (!priceOf.has(m.id)) return ' <button type="button" class="chip warn" data-price="' + m.id + '" style="border:0;cursor:pointer">+ ใส่ราคาขาย</button>';
+      const p = priceOf.get(m.id);
+      const gp = cost !== null ? ` · กำไร ${baht((p - cost) * -m.qty)}` : '';
+      return ` <button type="button" class="muted mono" data-price="${m.id}" data-cur="${p}" style="border:0;background:none;cursor:pointer;padding:0">@${baht(p)} = ${baht(p * -m.qty)}${gp} ✎</button>`;
+    };
     const nameOf = new Map(people.map((p) => [p.id, p.full_name]));
     const byWho = (m) => [m.created_by ? `โดย ${nameOf.get(m.created_by) || '-'}` : '',
       m.bill_by ? `เติมบิลโดย ${nameOf.get(m.bill_by) || '-'} ${fmtDate(m.bill_at)}` : ''].filter(Boolean).join(' · ');
@@ -645,10 +672,15 @@ async function viewLot(code) {
           <div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" class="mono" placeholder="ไม่รู้ เว้นว่างได้"></label>
           <label class="f">ลูกค้า<input name="cust" placeholder="ไม่รู้ เว้นว่างได้"></label></div>
           <label class="f">หมายเหตุ (ใครสั่ง / รายละเอียด)<input name="note" placeholder="เช่น เซลล์ม่อนสั่ง ลูกค้าหน้าร้าน"></label>
+          ${isOffice() ? '<label class="f">ราคาขาย / หน่วย (บาท ก่อน VAT)<input name="price" type="number" min="0" step="any" inputmode="decimal" placeholder="ไม่รู้ เว้นว่างได้"></label>' : ''}
           <p class="muted" style="margin:0">ยังไม่รู้เลขบิลหรือลูกค้า ตัดไปก่อนได้ ระบบจะขึ้นใน "งานค้าง" ให้ออฟฟิศเติมทีหลัง</p>
           <button class="btn primary">ยืนยันตัดสต๊อค</button></form></div>
 
-      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div><div class="muted" style="font-size:12px">${esc(byWho(m))}</div></div><span style="display:flex;gap:8px;align-items:center"><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b>${['sale', 'return', 'adjust'].includes(m.kind) ? delBtn('admin_delete_move', m.id, `ลบรายการ${KIND_TH[m.kind]} ${num(m.qty)} ${m.doc_no || ''} ?`, '', '×') : ''}</span></div>`).join('')}</div></div>
+      ${isOffice() ? `<div class="card"><div class="row"><h2>ราคาทุน</h2><span class="muted" style="font-size:12px">เห็นเฉพาะออฟฟิศ</span></div>
+        <form id="costForm" class="row" style="gap:8px"><label class="f" style="flex:1">ราคาทุน / หน่วย (บาท ก่อน VAT)<input name="cost" type="number" min="0" step="any" inputmode="decimal" value="${cost ?? ''}" required></label>
+          <button class="btn dark sm" style="align-self:flex-end">บันทึก</button></form>
+        ${cost !== null ? `<div class="row muted"><span>มูลค่าคงเหลือ ${num(bal.qty_on_hand)} ${esc(lot.products.unit)}</span><b class="mono">${baht(cost * Number(bal.qty_on_hand))}</b></div>` : '<span class="chip warn">ยังไม่ใส่ราคาทุน</span>'}</div>` : ''}
+      <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div>${priceTag(m) ? `<div style="font-size:13px">${priceTag(m)}</div>` : ''}<div class="muted" style="font-size:12px">${esc(byWho(m))}</div></div><span style="display:flex;gap:8px;align-items:center"><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b>${['sale', 'return', 'adjust'].includes(m.kind) ? delBtn('admin_delete_move', m.id, `ลบรายการ${KIND_TH[m.kind]} ${num(m.qty)} ${m.doc_no || ''} ?`, '', '×') : ''}</span></div>`).join('')}</div></div>
 
       ${isOffice() ? `<div class="grid2"><a class="btn ghost" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a><a class="btn ghost" href="#/process/new?lot=${esc(lot.lot_code)}">ส่งตัด / ขัด</a></div>` : ''}
       ${delBtn('admin_delete_lot', lot.lot_no, `ลบ Lot ${lot.lot_code} ทั้งหมด?\n(ประวัติตัดสต๊อค ใบเซอร์ รูป ค่าวัด และงาน process ของ Lot นี้จะหายทั้งหมด กู้คืนไม่ได้)`, '#/', 'ลบ Lot นี้ทั้งหมด')}
@@ -671,6 +703,17 @@ async function viewLot(code) {
       const rows = [...fd.entries()].filter(([, v]) => v !== '').map(([measure, value]) => ({ lot_no: lot.lot_no, measure, value: Number(value) }));
       try { await q(sb.from('lot_measurements').insert(rows)); toast('บันทึกค่าวัดแล้ว'); viewLot(code); } catch (err) { fail(err); }
     };
+    const costForm = document.getElementById('costForm');
+    if (costForm) costForm.onsubmit = async (e) => {
+      e.preventDefault();
+      try { await q(sb.from('lot_costs').upsert({ lot_no: lot.lot_no, unit_cost: Number(new FormData(costForm).get('cost')) })); toast('บันทึกราคาทุนแล้ว'); viewLot(code); } catch (err) { fail(err); }
+    };
+    app.querySelectorAll('[data-price]').forEach((b) => b.onclick = async () => {
+      const v = prompt('ราคาขาย / หน่วย (บาท ก่อน VAT)', b.dataset.cur || '');
+      if (v === null || v.trim() === '') return;
+      if (!(Number(v) >= 0)) return toast('ใส่ตัวเลขเท่านั้น');
+      try { await q(sb.from('move_prices').upsert({ move_id: Number(b.dataset.price), unit_price: Number(v) })); toast('บันทึกราคาขายแล้ว'); viewLot(code); } catch (err) { fail(err); }
+    });
     document.getElementById('cutForm').onsubmit = async (e) => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -679,7 +722,9 @@ async function viewLot(code) {
       const doc = String(fd.get('doc') || '').trim().toUpperCase() || null;
       if (!confirm(`ตัด ${num(qty)} ${lot.products.unit} จาก Lot ${lot.lot_code}\n${doc ? 'บิล ' + doc : '(ยังไม่มีเลขบิล — จะขึ้นในงานค้าง)'}`)) return;
       try {
-        await q(sb.from('stock_moves').insert({ lot_no: lot.lot_no, kind: 'sale', qty: -qty, doc_no: doc, customer: String(fd.get('cust') || '').trim() || null, note: String(fd.get('note') || '').trim() || null }));
+        const mv = await q(sb.from('stock_moves').insert({ lot_no: lot.lot_no, kind: 'sale', qty: -qty, doc_no: doc, customer: String(fd.get('cust') || '').trim() || null, note: String(fd.get('note') || '').trim() || null }).select('id').single());
+        const pr = fd.get('price');
+        if (isOffice() && pr !== null && pr !== '') await q(sb.from('move_prices').insert({ move_id: mv.id, unit_price: Number(pr) }));
         toast(doc ? 'ตัดสต๊อคแล้ว' : 'ตัดสต๊อคแล้ว · รอเติมเลขบิล'); viewLot(code);
       } catch (err) { fail(err); }
     };
@@ -819,24 +864,33 @@ async function viewSearch(params) {
 /* ===================== งานค้าง: ตัดสต๊อครอเลขบิล ===================== */
 async function viewPending() {
   setTabs('home');
-  app.innerHTML = head('ตัดสต๊อครอเลขบิล', 'คลังตัดไปก่อน · ออฟฟิศเติมเลขบิลและชื่อลูกค้า', '#/') + '<p class="loading">กำลังโหลด…</p>';
+  app.innerHTML = head('งานค้างตัดสต๊อค', 'เติมเลขบิล / ชื่อลูกค้า / ราคาขาย', '#/') + '<p class="loading">กำลังโหลด…</p>';
   try {
-    const rows = await q(sb.from('stock_moves')
-      .select('id, qty, customer, note, created_at, created_by, lots(lot_code, products(name, unit))')
-      .eq('kind', 'sale').is('doc_no', null).order('id'));
-    const ids = [...new Set(rows.map((r) => r.created_by).filter(Boolean))];
+    const sel = 'id, qty, doc_no, customer, note, created_at, created_by, lots(lot_code, products(name, unit))';
+    const [noBill, noPrice] = await Promise.all([
+      q(sb.from('stock_moves').select(sel).eq('kind', 'sale').is('doc_no', null).order('id')),
+      isOffice() ? q(sb.from('sales_without_price').select('id, qty, doc_no, customer, note, created_at, created_by, lots(lot_code, products(name, unit))').not('doc_no', 'is', null).order('id').limit(200)) : [],
+    ]);
+    const ids = [...new Set([...noBill, ...noPrice].map((r) => r.created_by).filter(Boolean))];
     const people = ids.length ? await q(sb.from('profiles').select('id, full_name').in('id', ids)) : [];
     const who = new Map(people.map((p) => [p.id, p.full_name]));
-    app.innerHTML = head('ตัดสต๊อครอเลขบิล', `${rows.length} รายการ · ออฟฟิศเติมเลขบิลและชื่อลูกค้า`, '#/') + `
-    <div class="wrap">
-      ${rows.length ? rows.map((r) => `<form class="card fillForm" data-id="${r.id}">
-        <div class="row"><a class="lotcode" href="#/lot/${r.lots.lot_code}">Lot ${r.lots.lot_code}</a><span class="muted">${fmtDate(r.created_at)}</span></div>
+    const priceInput = '<label class="f">ราคาขาย / หน่วย (บาท ก่อน VAT)<input name="price" type="number" min="0" step="any" inputmode="decimal"></label>';
+    const top = (r) => `<div class="row"><a class="lotcode" href="#/lot/${r.lots.lot_code}">Lot ${r.lots.lot_code}</a><span class="muted">${fmtDate(r.created_at)}</span></div>
         <div><b>${esc(r.lots.products.name)}</b> × ${num(-r.qty)} ${esc(r.lots.products.unit)}</div>
-        <div class="muted">ตัดโดย ${esc(who.get(r.created_by) || '-')}${r.note ? ' · ' + esc(r.note) : ''}</div>
+        <div class="muted">ตัดโดย ${esc(who.get(r.created_by) || '-')}${r.note ? ' · ' + esc(r.note) : ''}</div>`;
+    app.innerHTML = head('งานค้างตัดสต๊อค', 'เติมเลขบิล / ชื่อลูกค้า / ราคาขาย', '#/') + `
+    <div class="wrap">
+      <h2 style="margin:4px 0 0;font-size:16px">รอเลขบิล · ${noBill.length} รายการ</h2>
+      ${noBill.length ? noBill.map((r) => `<form class="card fillForm" data-id="${r.id}">${top(r)}
         ${isOffice() ? `<div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" required class="mono" placeholder="INV2026100001"></label>
-          <label class="f">ลูกค้า<input name="cust" value="${esc(r.customer || '')}"></label></div>
+          <label class="f">ลูกค้า<input name="cust" value="${esc(r.customer || '')}"></label></div>${priceInput}
           <button class="btn dark">บันทึก</button>` : '<span class="chip warn">รอออฟฟิศเติมเลขบิล</span>'}
       </form>`).join('') : '<div class="card"><p class="empty">ไม่มีรายการค้าง 🎉</p></div>'}
+      ${isOffice() ? `<h2 style="margin:10px 0 0;font-size:16px">มีบิลแล้ว รอใส่ราคาขาย · ${noPrice.length} รายการ</h2>
+      ${noPrice.length ? noPrice.map((r) => `<form class="card priceForm" data-id="${r.id}">${top(r)}
+        <div class="muted">บิล <span class="mono">${esc(r.doc_no)}</span>${r.customer ? ' · ' + esc(r.customer) : ''}</div>
+        <div class="row" style="gap:8px">${priceInput.replace('<label class="f">', '<label class="f" style="flex:1">').replace('decimal">', 'decimal" required>')}<button class="btn dark sm" style="align-self:flex-end">บันทึก</button></div>
+      </form>`).join('') : '<div class="card"><p class="empty">ใส่ราคาครบแล้ว 🎉</p></div>'}` : ''}
     </div>`;
     app.querySelectorAll('.fillForm').forEach((f) => f.onsubmit = async (e) => {
       e.preventDefault();
@@ -847,9 +901,16 @@ async function viewPending() {
           doc_no: String(fd.get('doc')).trim().toUpperCase(),
           customer: String(fd.get('cust') || '').trim() || null,
         }).eq('id', Number(f.dataset.id)));
+        if (fd.get('price') !== null && fd.get('price') !== '') await q(sb.from('move_prices').upsert({ move_id: Number(f.dataset.id), unit_price: Number(fd.get('price')) }));
         toast('บันทึกแล้ว');
         viewPending();
       } catch (err) { fail(err); f.querySelector('button').disabled = false; }
+    });
+    app.querySelectorAll('.priceForm').forEach((f) => f.onsubmit = async (e) => {
+      e.preventDefault();
+      f.querySelector('button').disabled = true;
+      try { await q(sb.from('move_prices').upsert({ move_id: Number(f.dataset.id), unit_price: Number(new FormData(f).get('price')) })); toast('บันทึกราคาแล้ว'); viewPending(); }
+      catch (err) { fail(err); f.querySelector('button').disabled = false; }
     });
   } catch (e) { fail(e); }
 }

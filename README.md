@@ -29,3 +29,4 @@
 11. `supabase/011_delivery.sql`
 12. `supabase/012_bill_filled_by.sql`
 13. `supabase/013_shapes.sql`
+14. `supabase/014_prices.sql`
