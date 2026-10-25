@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025101724';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025101724';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025115500';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025115500';
 
 initI18n();
 
@@ -305,7 +305,7 @@ async function viewHome() {
   try {
     const [pos, noLabel, noBill, noPrice, noCert, noPhoto, overdue, recent] = await Promise.all([
       q(sb.from('purchase_orders').select(PO_SELECT).limit(500)),
-      q(sb.from('lots').select('lot_no').is('label_printed_at', null)),
+      q(sb.from('lots').select('lot_no').is('label_printed_at', null).not('receipt_id', 'is', null)),
       q(sb.from('stock_moves').select('id').eq('kind', 'sale').is('doc_no', null)),
       isOffice() ? q(sb.from('sales_without_price').select('id').not('doc_no', 'is', null)) : Promise.resolve([]),
       q(sb.from('lot_balance').select('lot_no', { count: 'exact', head: false }).eq('has_cert', false).gt('qty_on_hand', 0)),
@@ -320,7 +320,7 @@ async function viewHome() {
       ['PO ยังไม่แตก Lot', 'ออฟฟิศแตก Lot ให้ครบทุกรายการ', pos.filter((p) => poStatus(p).key === 'split').length, 'warn', '#/po?f=split'],
       ['ตัดสต๊อครอเลขบิล', 'เติมเลขบิล / ชื่อลูกค้า', noBill.length, 'bad', '#/pending'],
       ...(isOffice() ? [['ขายแล้ว รอใส่ราคาขาย', 'ออฟฟิศใส่ราคาขายต่อหน่วย', noPrice.length, 'warn', '#/pending']] : []),
-      ['Lot รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
+      ['Lot รอพิมพ์สติกเกอร์', 'รับของแล้ว · ออฟฟิศพิมพ์แล้วส่งให้คลังติด', noLabel.length, 'warn', '#/labels'],
       ['Lot รอใบเซอร์', 'ออฟฟิศต้องอัปโหลด', noCert.length, 'warn', '#/lots?f=nocert'],
       ['Lot รอรูปวัดขนาด', 'คลังต้องถ่ายรูป', noPhoto.length, 'warn', '#/lots?f=nophoto'],
       ['ส่งตัด/ขัด ยังไม่รับคืน', late ? `เลยกำหนด ${late} งาน` : 'ติดตามจนกว่าจะรับคืน', overdue.length, late ? 'bad' : 'warn', '#/process'],
@@ -540,7 +540,7 @@ async function viewPO(id) {
               <span class="muted" style="color:${hasCert.has(x.lot_no) ? 'var(--ok)' : 'var(--warn)'}">${hasCert.has(x.lot_no) ? `ใบเซอร์ ✓${x.heat_no ? ' · Heat ' + esc(x.heat_no) : ''}` : 'ยังไม่มีใบเซอร์'}</span></a>
             <div style="display:flex;gap:6px;flex:none;flex-wrap:wrap;justify-content:flex-end">
               ${isOffice() && !hasCert.has(x.lot_no) ? `<label class="btn primary sm">อัปโหลดเซอร์<input type="file" accept="application/pdf,image/*" hidden data-cert="${x.lot_no}"></label>` : ''}
-              ${isOffice() ? `<a class="btn ghost sm" href="#/label/${x.lot_code}">สติกเกอร์</a>` : ''}
+              ${isOffice() && rc ? `<a class="btn ghost sm" href="#/label/${x.lot_code}">สติกเกอร์</a>` : ''}
               ${delBtn('admin_delete_lot', x.lot_no, `ลบ Lot ${x.lot_code} ทั้งหมด? (กู้คืนไม่ได้)`)}
             </div></div>`;
           }).join('')}
@@ -685,7 +685,7 @@ async function viewLot(code) {
         ${cost !== null ? `<div class="row muted"><span>มูลค่าคงเหลือ ${num(bal.qty_on_hand)} ${esc(lot.products.unit)}</span><b class="mono">${baht(cost * Number(bal.qty_on_hand))}</b></div>` : '<span class="chip warn">ยังไม่ใส่ราคาทุน</span>'}</div>` : ''}
       <div class="card"><h2>ประวัติ</h2><div class="list">${moves.map((m) => `<div class="row"><div><div>${KIND_TH[m.kind] || m.kind} ${m.doc_no ? `<span class="mono" style="color:var(--link)">${esc(m.doc_no)}</span>` : (m.kind === 'sale' ? '<span class="chip bad">รอเลขบิล</span>' : '')}</div><div class="muted">${esc(m.customer || '')} ${esc(m.note || '')} ${fmtDate(m.created_at)}</div>${priceTag(m) ? `<div style="font-size:13px">${priceTag(m)}</div>` : ''}<div class="muted" style="font-size:12px">${esc(byWho(m))}</div></div><span style="display:flex;gap:8px;align-items:center"><b class="mono">${Number(m.qty) > 0 ? '+' : ''}${num(m.qty)}</b>${['sale', 'return', 'adjust'].includes(m.kind) ? delBtn('admin_delete_move', m.id, `ลบรายการ${KIND_TH[m.kind]} ${num(m.qty)} ${m.doc_no || ''} ?`, '', '×') : ''}</span></div>`).join('')}</div></div>
 
-      ${isOffice() ? `<div class="grid2"><a class="btn ghost" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a><a class="btn ghost" href="#/process/new?lot=${esc(lot.lot_code)}">ส่งตัด / ขัด</a></div>` : ''}
+      ${isOffice() ? `<div class="grid2">${lot.receipt_id ? `<a class="btn ghost" href="#/label/${esc(lot.lot_code)}">พิมพ์สติกเกอร์</a>` : '<span class="btn ghost" style="opacity:.5;cursor:default" title="กดรับของก่อน">พิมพ์สติกเกอร์ (รอรับของ)</span>'}<a class="btn ghost" href="#/process/new?lot=${esc(lot.lot_code)}">ส่งตัด / ขัด</a></div>` : ''}
       ${delBtn('admin_delete_lot', lot.lot_no, `ลบ Lot ${lot.lot_code} ทั้งหมด?\n(ประวัติตัดสต๊อค ใบเซอร์ รูป ค่าวัด และงาน process ของ Lot นี้จะหายทั้งหมด กู้คืนไม่ได้)`, '#/', 'ลบ Lot นี้ทั้งหมด')}
     </div>`;
 
@@ -740,8 +740,11 @@ async function viewLabel(codeParam) {
   setTabs(null);
   const codes = codeParam.split(',').map((c) => lotCode(c.trim())).filter(Boolean);
   try {
-    const lots = await q(sb.from('lots').select('lot_no, lot_code, qty_received, bundle_label, label_printed_at, products(name, unit), receipts(received_at)').in('lot_code', codes).order('lot_no'));
-    if (!lots.length) { app.innerHTML = head('สติกเกอร์', '', '#/') + '<div class="wrap"><p class="err">ไม่พบ Lot</p></div>'; return; }
+    const all = await q(sb.from('lots').select('lot_no, lot_code, qty_received, bundle_label, label_printed_at, receipt_id, products(name, unit), receipts(received_at)').in('lot_code', codes).order('lot_no'));
+    // พิมพ์ได้เฉพาะ Lot ที่กดรับของแล้ว (จำนวนบนป้ายจะเป็นจำนวนที่รับจริง)
+    const lots = all.filter((l) => l.receipt_id);
+    if (!lots.length) { app.innerHTML = head('สติกเกอร์', '', '#/') + `<div class="wrap"><p class="err">${all.length ? 'Lot นี้ยังไม่ได้กดรับของ · กดรับของก่อนถึงจะพิมพ์สติกเกอร์ได้' : 'ไม่พบ Lot'}</p></div>`; return; }
+    if (lots.length < all.length) toast(`ข้าม ${all.length - lots.length} Lot ที่ยังไม่ได้รับของ`, 4000);
     const qrs = await Promise.all(lots.map((l) => QRCode.toDataURL(`${baseUrl()}#/lot/${l.lot_code}`, { margin: 0, width: 300, errorCorrectionLevel: 'M' })));
     const back = lots.length === 1 ? '#/lot/' + lots[0].lot_code : '#/labels';
     // โหมดพิมพ์: a4 = กระดาษ A4 หน้าละ 8 ป้าย (ตัดแปะฟิวเจอร์บอร์ด) · roll = เครื่องพิมพ์สติกเกอร์ 75×50
@@ -805,7 +808,7 @@ async function viewLabels() {
   setTabs('home');
   app.innerHTML = head('รอพิมพ์สติกเกอร์', 'ออฟฟิศพิมพ์แล้วส่งให้คลังติด', '#/') + '<p class="loading">กำลังโหลด…</p>';
   try {
-    const lots = await q(sb.from('lots').select('lot_code, qty_received, bundle_label, created_at, products(name, unit)').is('label_printed_at', null).order('lot_no'));
+    const lots = await q(sb.from('lots').select('lot_code, qty_received, bundle_label, created_at, products(name, unit)').is('label_printed_at', null).not('receipt_id', 'is', null).order('lot_no'));
     app.innerHTML = head('รอพิมพ์สติกเกอร์', `${lots.length} Lot · ออฟฟิศพิมพ์แล้วส่งให้คลังติด`, '#/') + `
     <form class="wrap" id="lf">
       ${lots.length ? `<div class="card"><label class="row" style="justify-content:flex-start;gap:10px"><input type="checkbox" id="all" checked style="width:22px;min-height:22px"> <b>เลือกทั้งหมด</b></label>
