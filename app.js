@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261025161601';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261025161601';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261109155712';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261109155712';
 
 initI18n();
 
@@ -616,7 +616,7 @@ async function viewLot(code) {
       q(sb.from('lot_balance').select('*').eq('lot_no', lot.lot_no).single()),
       q(sb.from('lot_files').select('*').eq('lot_no', lot.lot_no).order('id')),
       q(sb.from('lot_measurements').select('*').eq('lot_no', lot.lot_no).order('id')),
-      q(sb.from('stock_moves').select('*').eq('lot_no', lot.lot_no).order('id', { ascending: false })),
+      q(sb.from('stock_moves').select('*').eq('lot_no', lot.lot_no).order('created_at', { ascending: false }).order('id', { ascending: false })),
       q(sb.from('profiles').select('id, full_name')).catch(() => []),
     ]);
     // ราคา: เฉพาะออฟฟิศ/แอดมิน (บัญชีคลังอ่านตารางราคาไม่ได้อยู่แล้ว)
@@ -638,6 +638,7 @@ async function viewLot(code) {
     };
     const nameOf = new Map(people.map((p) => [p.id, p.full_name]));
     const byWho = (m) => [m.created_by ? `โดย ${nameOf.get(m.created_by) || '-'}` : '',
+      m.entered_at && isoDay(m.entered_at) !== isoDay(m.created_at) ? `ลงย้อนหลังเมื่อ ${fmtDate(m.entered_at)}` : '',
       m.bill_by ? `เติมบิลโดย ${nameOf.get(m.bill_by) || '-'} ${fmtDate(m.bill_at)}` : ''].filter(Boolean).join(' · ');
     const sold = -moves.filter((m) => m.kind === 'sale').reduce((s, m) => s + Number(m.qty), 0);
     const cat = CATEGORIES[lot.products.category] || CATEGORIES.other;
@@ -683,6 +684,7 @@ async function viewLot(code) {
           <div class="grid2"><label class="f">เลขบิล (INV / NO)<input name="doc" class="mono" placeholder="ไม่รู้ เว้นว่างได้"></label>
           <label class="f">ลูกค้า<input name="cust" placeholder="ไม่รู้ เว้นว่างได้"></label></div>
           <label class="f">หมายเหตุ (ใครสั่ง / รายละเอียด)<input name="note" placeholder="เช่น เซลล์ม่อนสั่ง ลูกค้าหน้าร้าน"></label>
+          ${isAdmin() ? `<label class="f">วันที่ขาย <small class="muted">(แอดมินเลือกย้อนหลังได้)</small><input name="date" type="date" value="${isoDay(new Date())}" max="${isoDay(new Date())}" required></label>` : ''}
           ${isOffice() ? '<label class="f">ราคาขาย / หน่วย (บาท ก่อน VAT)<input name="price" type="number" min="0" step="any" inputmode="decimal" placeholder="ไม่รู้ เว้นว่างได้"></label>' : ''}
           <p class="muted" style="margin:0">ยังไม่รู้เลขบิลหรือลูกค้า ตัดไปก่อนได้ ระบบจะขึ้นใน "งานค้าง" ให้ออฟฟิศเติมทีหลัง</p>
           <button class="btn primary">ยืนยันตัดสต๊อค</button></form></div>
@@ -738,9 +740,18 @@ async function viewLot(code) {
       const qty = Number(fd.get('qty'));
       if (qty > Number(bal.qty_on_hand)) return toast(`Lot นี้เหลือ ${num(bal.qty_on_hand)} ตัด ${num(qty)} ไม่ได้ กรุณานับใหม่`, 5000);
       const doc = String(fd.get('doc') || '').trim().toUpperCase() || null;
-      if (!confirm(`ตัด ${num(qty)} ${lot.products.unit} จาก Lot ${lot.lot_code}\n${doc ? 'บิล ' + doc : '(ยังไม่มีเลขบิล — จะขึ้นในงานค้าง)'}`)) return;
+      // แอดมินเลือกวันที่ย้อนหลังได้ (ใช้เวลาปัจจุบันของวันนั้น) · คนอื่นใช้เวลาตอนกดเสมอ (ฐานข้อมูลบังคับซ้ำอีกชั้น)
+      const day = isAdmin() ? String(fd.get('date') || '') : '';
+      const today = isoDay(new Date());
+      if (day && day > today) return toast('ลงวันที่ล่วงหน้าไม่ได้');
+      const back = day && day !== today;
+      let at;
+      if (back) { const d = new Date(); const [y, mo, dd] = day.split('-').map(Number); d.setFullYear(y, mo - 1, dd); at = d.toISOString(); }
+      if (!confirm(`ตัด ${num(qty)} ${lot.products.unit} จาก Lot ${lot.lot_code}${back ? '\nวันที่ขาย ' + fmtDate(at) + ' (ย้อนหลัง)' : ''}\n${doc ? 'บิล ' + doc : '(ยังไม่มีเลขบิล — จะขึ้นในงานค้าง)'}`)) return;
       try {
-        const mv = await q(sb.from('stock_moves').insert({ lot_no: lot.lot_no, kind: 'sale', qty: -qty, doc_no: doc, customer: String(fd.get('cust') || '').trim() || null, note: String(fd.get('note') || '').trim() || null }).select('id').single());
+        const row = { lot_no: lot.lot_no, kind: 'sale', qty: -qty, doc_no: doc, customer: String(fd.get('cust') || '').trim() || null, note: String(fd.get('note') || '').trim() || null };
+        if (back) row.created_at = at;
+        const mv = await q(sb.from('stock_moves').insert(row).select('id').single());
         const pr = fd.get('price');
         if (isOffice() && pr !== null && pr !== '') await q(sb.from('move_prices').insert({ move_id: mv.id, unit_price: Number(pr) }));
         toast(doc ? 'ตัดสต๊อคแล้ว' : 'ตัดสต๊อคแล้ว · รอเติมเลขบิล'); viewLot(code);
