@@ -1,7 +1,7 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import QRCode from 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/+esm';
-import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261109155712';
-import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261109155712';
+import { SUPABASE_URL, SUPABASE_KEY, EMAIL_DOMAIN, SUPPLIERS, CATEGORIES, TOOL_TH } from './config.js?v=20261112155933';
+import { initI18n, langToggleHtml, setLang, getLang } from './i18n.js?v=20261112155933';
 
 initI18n();
 
@@ -386,12 +386,15 @@ async function viewPOList(params = new URLSearchParams()) {
 async function viewPONew() {
   setTabs('po');
   if (!isOffice()) { app.innerHTML = head('สร้าง PO', '', '#/po') + '<div class="wrap"><p class="err">เฉพาะแอดมินและออฟฟิศ</p></div>'; return; }
+  let used = [];
+  try { used = (await q(sb.from('purchase_orders').select('supplier').limit(2000))).map((r) => r.supplier); } catch (e) { /* ใช้รายชื่อหลักอย่างเดียว */ }
+  const sups = [...new Set([...SUPPLIERS.filter((s) => s !== 'อื่นๆ'), ...used.filter(Boolean).filter((s) => s !== 'อื่นๆ'), 'อื่นๆ'])];
   app.innerHTML = head('สร้าง PO + แตก Lot', 'ลงไว้ก่อนของมาถึง · คลังกดรับวันที่ของมาส่ง', '#/po') + `
   <form class="wrap" id="poForm">
     <div class="card">
       <label class="f">เลข PO<input name="po_no" required placeholder="PO2026100001" class="mono"></label>
       <div class="grid2">
-        <label class="f">ผู้ขาย<select name="supplier">${SUPPLIERS.map((s) => `<option>${s}</option>`).join('')}</select></label>
+        <label class="f">ผู้ขาย<select name="supplier" id="supSel">${sups.map((s) => `<option>${esc(s)}</option>`).join('')}${isAdmin() ? '<option value="__new">+ เพิ่มผู้ขายใหม่…</option>' : ''}</select></label>
         <label class="f">วันที่สั่ง<input name="ordered_at" type="date" value="${new Date().toISOString().slice(0, 10)}"></label>
       </div>
       <label class="f">หมายเหตุ<input name="note"></label>
@@ -464,6 +467,16 @@ async function viewPONew() {
     lines.appendChild(div);
   };
   document.getElementById('addLine').onclick = addLine;
+  const supSel = document.getElementById('supSel');
+  supSel.onchange = () => {
+    if (supSel.value !== '__new') return;
+    const name = (prompt('ชื่อผู้ขายใหม่') || '').trim();
+    if (!name) { supSel.selectedIndex = 0; return; }
+    const opt = document.createElement('option');
+    opt.textContent = name;
+    supSel.insertBefore(opt, supSel.querySelector('option[value="__new"]'));
+    supSel.value = name;
+  };
   addLine();
 
   document.getElementById('poForm').onsubmit = async (e) => {
@@ -487,7 +500,7 @@ async function viewPONew() {
       const same = await q(sb.from('purchase_orders').select('id').eq('po_no', poNo));
       if (same.length && !confirm(`มี PO ${poNo} อยู่แล้ว ${same.length} ใบ\nต้องการบันทึกเพิ่มอีกใบใช่ไหม?`)) { btn.disabled = false; return; }
       const po = await q(sb.from('purchase_orders').insert({
-        po_no: String(fd.get('po_no')).trim(), supplier: fd.get('supplier'), ordered_at: fd.get('ordered_at'), note: fd.get('note') || null,
+        po_no: String(fd.get('po_no')).trim(), supplier: fd.get('supplier') === '__new' ? 'อื่นๆ' : fd.get('supplier'), ordered_at: fd.get('ordered_at'), note: fd.get('note') || null,
       }).select('id').single());
       for (const r of rows) {
         let p = byName.get(r.name);
